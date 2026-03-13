@@ -5,3 +5,4 @@ requests
 supabase
 sentence-transformers
 psycopg[binary]
+networkx

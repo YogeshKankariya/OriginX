@@ -14,6 +14,9 @@ class Settings:
     NEWSAPI_KEY: str = os.getenv("NEWSAPI_KEY", "")
     GOOGLE_AI_STUDIO_API_KEY: str = os.getenv("GOOGLE_AI_STUDIO_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.0-mini")
+    VIRUSTOTAL_API_KEY: str = os.getenv("VIRUSTOTAL_API_KEY", "")
+    OPENPHISH_FEED_URL: str = os.getenv("OPENPHISH_FEED_URL", "")
+    REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "")
 
 
 settings = Settings()
