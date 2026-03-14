@@ -1,7 +1,7 @@
 from typing import Any
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.claims_service import (
@@ -19,6 +19,14 @@ from app.services.reddit_propagation import analyze_reddit_propagation
 from app.utils.text_processing import preprocess_claim_text
 
 router = APIRouter()
+
+
+def _raise_internal_server_error() -> None:
+    raise HTTPException(status_code=500, detail="Unexpected server error.")
+
+
+def _raise_operation_failed() -> None:
+    raise HTTPException(status_code=500, detail="Operation failed.")
 
 
 class VerifyClaimRequest(BaseModel):
@@ -69,15 +77,19 @@ def verify_claim(payload: VerifyClaimRequest) -> dict:
             previous_verification_result = str(previous_result.get("verification_result", ""))
             previous_verdict = previous_result.get("verdict") or _verdict_from_result(previous_verification_result)
             previous_sources = previous_result.get("sources") if isinstance(previous_result.get("sources"), list) else []
-            return {
+            found_response = {
                 "status": "found",
                 "verification_result": previous_verification_result,
                 "verdict": previous_verdict,
                 "credibility_score": previous_result.get("credibility_score"),
                 "summary": previous_result.get("summary"),
-                "articles_found": len(previous_sources),
-                "sources": previous_sources,
             }
+
+            if previous_sources:
+                found_response["articles_found"] = len(previous_sources)
+                found_response["sources"] = previous_sources
+
+            return found_response
 
         insert_claim(processed_text)
         try:
@@ -106,9 +118,9 @@ def verify_claim(payload: VerifyClaimRequest) -> dict:
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()
 
     response_payload = {
         "status": "generated",
@@ -201,25 +213,25 @@ def verify_claim_final(payload: FinalVerifyRequest) -> dict[str, Any]:
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()
 
 
 @router.get("/dashboard/summary")
-def dashboard_summary(limit: int = 500) -> dict[str, Any]:
+def dashboard_summary(limit: int = Query(default=500, ge=1, le=2000)) -> dict[str, Any]:
     try:
         return get_dashboard_summary(limit=limit)
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()
 
 
 @router.get("/history/verifications")
-def history_verifications(limit: int = 200) -> dict[str, Any]:
+def history_verifications(limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
     try:
         items = get_recent_verifications(limit=limit)
         return {
@@ -231,6 +243,6 @@ def history_verifications(limit: int = 200) -> dict[str, Any]:
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()

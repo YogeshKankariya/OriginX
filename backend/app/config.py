@@ -17,6 +17,15 @@ class Settings:
     VIRUSTOTAL_API_KEY: str = os.getenv("VIRUSTOTAL_API_KEY", "")
     OPENPHISH_FEED_URL: str = os.getenv("OPENPHISH_FEED_URL", "")
     REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "")
+    TEST_DB_API_TOKEN: str = os.getenv("TEST_DB_API_TOKEN", "")
+    RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+    RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+    RATE_LIMIT_VERIFY_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_VERIFY_PER_WINDOW", "30"))
+    RATE_LIMIT_ANALYSIS_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_ANALYSIS_PER_WINDOW", "45"))
+    RATE_LIMIT_DASHBOARD_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_DASHBOARD_PER_WINDOW", "180"))
+    RATE_LIMIT_HISTORY_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_HISTORY_PER_WINDOW", "180"))
+    RATE_LIMIT_TRENDING_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_TRENDING_PER_WINDOW", "60"))
+    RATE_LIMIT_TEST_DB_PER_WINDOW: int = int(os.getenv("RATE_LIMIT_TEST_DB_PER_WINDOW", "15"))
     BACKEND_CORS_ORIGINS: list[str] = [
         origin.strip()
         for origin in os.getenv(

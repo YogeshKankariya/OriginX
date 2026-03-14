@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.domain_security import analyze_claim_urls, analyze_domain_risk
@@ -9,6 +9,14 @@ from app.services.propagation_analysis import analyze_propagation
 from app.services.reddit_propagation import analyze_reddit_propagation
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+
+def _raise_internal_server_error() -> None:
+    raise HTTPException(status_code=500, detail="Unexpected server error.")
+
+
+def _raise_operation_failed() -> None:
+    raise HTTPException(status_code=502, detail="Upstream analysis service failed.")
 
 
 class PropagationEvent(BaseModel):
@@ -42,7 +50,7 @@ def propagation_analysis(payload: PropagationRequest) -> dict[str, Any]:
         events = [event.model_dump() for event in payload.events]
         return analyze_propagation(events)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()
 
 
 @router.post("/domain-security")
@@ -70,14 +78,14 @@ def reddit_propagation_analysis(payload: RedditPropagationRequest) -> dict[str, 
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()
 
 
 @router.get("/trending-news")
 def trending_daily_news(
-    limit: int = 12,
+    limit: int = Query(default=12, ge=1, le=50),
     country: str = "global",
     category: str | None = None,
     local_country: str | None = None,
@@ -92,6 +100,6 @@ def trending_daily_news(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_operation_failed()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_internal_server_error()

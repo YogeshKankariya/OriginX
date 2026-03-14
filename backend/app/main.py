@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, validate_required_settings
+from app.middleware.rate_limit import rate_limit_middleware
 from app.routes.analysis import router as analysis_router
 from app.routes.claims import router as claims_router
 from app.routes.health import router as health_router
@@ -25,6 +26,8 @@ app.add_middleware(
 	allow_methods=["*"],
 	allow_headers=["*"],
 )
+
+app.middleware("http")(rate_limit_middleware)
 
 app.include_router(health_router)
 app.include_router(claims_router)
