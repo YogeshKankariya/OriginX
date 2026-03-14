@@ -1,10 +1,18 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services.claims_service import check_verification_history, insert_claim, insert_verification_history
+from app.services.claims_service import (
+    check_verification_history,
+    get_claim_history,
+    insert_claim,
+    insert_verification_history,
+)
 from app.services.credibility_engine import generate_verification_result
 from app.services.gemini_summary import generate_evidence_summary
 from app.services.news_verification import search_news_sources
+from app.services.reddit_propagation import analyze_reddit_propagation
 from app.utils.text_processing import preprocess_claim_text
 
 router = APIRouter()
@@ -14,6 +22,15 @@ class VerifyClaimRequest(BaseModel):
     text: str = Field(min_length=1)
 
 
+class FinalVerifyRequest(BaseModel):
+    text: str = Field(min_length=1)
+    include_propagation: bool = False
+    propagation_query: str | None = None
+    reddit_limit: int = 10
+    include_reddit_comments: bool = True
+    reddit_comments_per_post: int = 5
+
+
 def _verdict_from_result(verification_result: str) -> str:
     normalized = verification_result.strip().lower()
     if normalized == "true":
@@ -21,6 +38,19 @@ def _verdict_from_result(verification_result: str) -> str:
     if normalized == "false":
         return "Likely false or unsupported"
     return "Verdict unavailable"
+
+
+def _extract_source_names(sources: Any) -> list[str]:
+    if not isinstance(sources, list):
+        return []
+
+    names: list[str] = []
+    for source in sources:
+        if isinstance(source, dict):
+            source_name = str(source.get("source", "")).strip()
+            if source_name and source_name not in names:
+                names.append(source_name)
+    return names
 
 
 @router.post("/verify-claim")
@@ -90,3 +120,81 @@ def verify_claim(payload: VerifyClaimRequest) -> dict:
         response_payload["warning"] = news_lookup["warning"]
 
     return response_payload
+
+
+@router.post("/verify-claim/final")
+def verify_claim_final(payload: FinalVerifyRequest) -> dict[str, Any]:
+    processed_text = preprocess_claim_text(payload.text)
+
+    if not processed_text:
+        raise HTTPException(status_code=422, detail="Claim text cannot be empty after normalization.")
+
+    try:
+        history = get_claim_history(processed_text)
+        if history:
+            latest = history[0]
+            response: dict[str, Any] = {
+                "claim": processed_text,
+                "verification_result": str(latest.get("verification_result", "")),
+                "credibility_score": latest.get("credibility_score"),
+                "summary": latest.get("summary"),
+                "sources": _extract_source_names(latest.get("sources", [])),
+                "history_count": len(history),
+            }
+        else:
+            insert_claim(processed_text)
+            try:
+                news_lookup = search_news_sources(processed_text)
+            except (ValueError, RuntimeError) as exc:
+                news_lookup = {
+                    "articles_found": 0,
+                    "articles": [],
+                    "warning": str(exc),
+                }
+
+            verification_result = generate_verification_result(processed_text, news_lookup.get("articles", []))
+            summary = generate_evidence_summary(
+                processed_text,
+                verification_result.get("top_credible_articles", []),
+            )
+
+            insert_verification_history(
+                claim_text=processed_text,
+                verification_result=verification_result["verification_result"],
+                verdict=verification_result["verdict"],
+                credibility_score=verification_result["credibility_score"],
+                summary=summary,
+                sources=news_lookup.get("articles", []),
+            )
+
+            post_insert_history = get_claim_history(processed_text)
+            response = {
+                "claim": processed_text,
+                "verification_result": verification_result["verification_result"],
+                "credibility_score": verification_result["credibility_score"],
+                "summary": summary,
+                "sources": _extract_source_names(news_lookup.get("articles", [])),
+                "history_count": len(post_insert_history),
+            }
+
+            if "warning" in news_lookup:
+                response["warning"] = news_lookup["warning"]
+
+        if payload.include_propagation:
+            try:
+                response["propagation"] = analyze_reddit_propagation(
+                    query=payload.propagation_query or processed_text,
+                    limit=payload.reddit_limit,
+                    include_comments=payload.include_reddit_comments,
+                    comments_per_post=payload.reddit_comments_per_post,
+                )
+            except Exception as exc:
+                response["propagation_warning"] = str(exc)
+
+        return response
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
