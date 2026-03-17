@@ -53,6 +53,27 @@ export interface RedditEdge {
   weight: number;
 }
 
+export interface RedditNode {
+  id: string;
+  label?: string;
+  event_count?: number;
+  is_patient_zero?: boolean;
+  is_top_amplifier?: boolean;
+}
+
+export interface RedditTimelineEvent {
+  title: string;
+  detail: string;
+  username?: string | null;
+  summary?: string | null;
+  time?: string | null;
+  subreddit?: string | null;
+  metadata?: string | null;
+  metric?: string | null;
+  dot_color?: string | null;
+  line_color?: string | null;
+}
+
 export interface PropagationEvent {
   user_id: string;
   claim_text: string;
@@ -60,6 +81,7 @@ export interface PropagationEvent {
   narrative_key?: string | null;
   url?: string | null;
   domain?: string | null;
+  subreddit?: string | null;
 }
 
 export interface RedditAnalysis {
@@ -71,6 +93,11 @@ export interface RedditAnalysis {
     nodes: string[];
     edges: RedditEdge[];
   };
+  top_amplifier?: string | null;
+  events_captured?: number;
+  nodes?: RedditNode[];
+  edges?: RedditEdge[];
+  timeline?: RedditTimelineEvent[];
 }
 
 export interface RedditPropagationResponse {
@@ -78,6 +105,12 @@ export interface RedditPropagationResponse {
   query: string;
   events_count: number;
   events?: PropagationEvent[];
+  nodes?: RedditNode[];
+  edges?: RedditEdge[];
+  events_captured?: number;
+  patient_zero?: string | null;
+  top_amplifier?: string | null;
+  timeline?: RedditTimelineEvent[];
   analysis: RedditAnalysis;
 }
 
@@ -194,7 +227,28 @@ export interface HistoryVerificationsResponse {
 }
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
-const API_BASE_URL = (viteEnv?.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+
+function normalizeApiBaseUrl(value?: string): string {
+  const raw = (value || "http://127.0.0.1:8000").trim();
+  if (!raw) return "http://127.0.0.1:8000";
+
+  const normalized = raw.replace(/\/$/, "");
+  const ipv6WithProtocol = normalized.match(/^(https?:\/\/)(::1|[0-9a-f:]+)(:\d+)?$/i);
+  if (ipv6WithProtocol && !ipv6WithProtocol[2].startsWith("[")) {
+    const [, protocol, host, port = ""] = ipv6WithProtocol;
+    return `${protocol}[${host}]${port}`;
+  }
+
+  const bareIpv6 = normalized.match(/^(::1|[0-9a-f:]+)(:\d+)?$/i);
+  if (bareIpv6 && !normalized.includes("://")) {
+    const [, host, port = ""] = bareIpv6;
+    return `http://[${host}]${port}`;
+  }
+
+  return normalized;
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(viteEnv?.VITE_API_BASE_URL);
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
@@ -205,10 +259,20 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
         ...(options?.headers || {}),
       };
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers,
-    ...options,
-  });
+  const requestUrl = `${API_BASE_URL}${path}`;
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      headers,
+      ...options,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/invalid ipv6 url/i.test(message)) {
+      throw new Error(`Invalid API URL: ${requestUrl}. Check VITE_API_BASE_URL and use brackets for IPv6 addresses, e.g. http://[::1]:8000.`);
+    }
+    throw error;
+  }
 
   let payload: unknown = null;
   try {
