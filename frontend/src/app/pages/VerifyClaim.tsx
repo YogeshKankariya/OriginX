@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import {
   Sparkles,
@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Image as ImageIcon,
   Upload,
-  Globe,
   Facebook,
   Newspaper,
   Instagram,
@@ -19,13 +18,16 @@ import {
   Bot,
   BadgeCheck,
   ScanSearch,
-  CalendarClock
+  CalendarClock,
+  FileBarChart2,
+  Shield,
+  Globe as GlobeIcon,
 } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { CredibilityGauge } from '../components/CredibilityGauge';
 import { NetworkBackground } from '../components/NetworkBackground';
 import { useDarkMode } from '../components/DarkModeContext';
-import { extractTextFromImage, verifyClaim, type VerifyClaimResponse } from '../services/api';
+import { analyzeRedditPropagation, verifyClaim, type RedditPropagationResponse, type VerifyClaimResponse } from '../services/api';
 
 interface Article {
   id: number;
@@ -41,6 +43,15 @@ interface TimelineEvent {
   date: string;
   event: string;
   source: string;
+}
+
+interface SpreadTimelineEvent {
+  title: string;
+  detail: string;
+  time: string;
+  metric: string;
+  dotColor: string;
+  lineColor: string;
 }
 
 interface AnimatedCounterProps {
@@ -62,6 +73,13 @@ interface MetricCardProps {
   decimals?: number;
   prefix?: string;
   suffix?: string;
+}
+
+interface SpreadTimelinePanelProps {
+  eyebrow: string;
+  heading: string;
+  events: SpreadTimelineEvent[];
+  isDarkMode: boolean;
 }
 
 function AnimatedCounter({ value, decimals = 0, prefix = '', suffix = '', duration = 1200 }: AnimatedCounterProps) {
@@ -107,10 +125,21 @@ function MetricCard({
       whileHover={{ y: -4 }}
       className={`relative overflow-hidden rounded-2xl border p-5 transition-all duration-300 ${
         isDarkMode
-          ? 'bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))] border-white/8 backdrop-blur-xl'
-          : 'bg-white/90 border-[#E2E8F0] backdrop-blur-xl'
+          ? 'bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))] border-white/8 backdrop-blur-xl hover:border-white/20'
+          : 'bg-white/90 border-[#E2E8F0] backdrop-blur-xl hover:border-[#BFDBFE]'
       }`}
-      style={{ boxShadow: `0 0 0 1px rgba(255,255,255,0.03), 0 18px 40px ${glow}` }}
+      style={{ 
+        boxShadow: `0 0 0 1px rgba(255,255,255,0.03), 0 18px 40px ${glow}`,
+        borderColor: 'inherit'
+      }}
+      onMouseEnter={(e) => {
+        const target = e.currentTarget as HTMLDivElement;
+        target.style.borderColor = accent;
+      }}
+      onMouseLeave={(e) => {
+        const target = e.currentTarget as HTMLDivElement;
+        target.style.borderColor = 'inherit';
+      }}
     >
       <div
         className="absolute inset-x-0 top-0 h-px"
@@ -135,63 +164,84 @@ function MetricCard({
   );
 }
 
+function SpreadTimelinePanel({ eyebrow, heading, events, isDarkMode }: SpreadTimelinePanelProps) {
+  return (
+    <div
+      className={`rounded-[28px] border overflow-hidden ${
+        isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'
+      }`}
+    >
+      <div className="p-8 pb-6 border-b border-white/10">
+        <p className={`text-xs uppercase tracking-[0.24em] mb-2 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>{eyebrow}</p>
+        <h4 className={`text-lg ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{heading}</h4>
+      </div>
+
+      <div className="p-8 space-y-6">
+        {events.map((event, index) => {
+          const isLast = index === events.length - 1;
+
+          return (
+            <motion.div
+              key={`${event.title}-${event.time}`}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.1 + index * 0.08 }}
+              className="flex gap-4"
+            >
+              <div className="relative flex flex-col items-center pt-1">
+                <div
+                  className="w-4 h-4 rounded-full border-2"
+                  style={{
+                    backgroundColor: event.dotColor,
+                    borderColor: `${event.dotColor}4d`,
+                    boxShadow: `0 0 18px ${event.dotColor}66`
+                  }}
+                />
+                {!isLast && (
+                  <div
+                    className="w-0.5 h-20 mt-2"
+                    style={{ background: `linear-gradient(180deg, ${event.lineColor}66, ${event.lineColor}12)` }}
+                  />
+                )}
+              </div>
+              <div className={isLast ? '' : 'pb-6'}>
+                <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{event.title}</p>
+                <p className={`text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>{event.detail}</p>
+                <p className={`text-xs mt-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>{event.time} • {event.metric}</p>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function VerifyClaim() {
   const location = useLocation();
-  const navigationState = location.state as { claim?: string; autoAnalyze?: boolean } | null;
-  const initialClaim = navigationState?.claim || '';
-  const shouldAutoAnalyze = Boolean(navigationState?.autoAnalyze && initialClaim.trim());
+  const navigationState = location.state as { claim?: string; claimText?: string; autoAnalyze?: boolean; source?: string } | null;
+  const initialClaim = navigationState?.claim || navigationState?.claimText || '';
+  const shouldAutoAnalyze = Boolean((navigationState?.autoAnalyze || navigationState?.source === 'history') && initialClaim.trim());
   const { isDarkMode } = useDarkMode();
+  const navigate = useNavigate();
 
   const [claim, setClaim] = useState(initialClaim);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [ocrText, setOcrText] = useState('');
-  const [isExtractingText, setIsExtractingText] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState('English');
   const [verificationData, setVerificationData] = useState<VerifyClaimResponse | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analyzedAt, setAnalyzedAt] = useState<Date | null>(null);
+  const [lastAnalyzedClaim, setLastAnalyzedClaim] = useState(initialClaim);
+  const [activePlatform, setActivePlatform] = useState<'reddit' | 'x' | 'facebook' | 'instagram' | 'news' | null>(null);
+  const [redditData, setRedditData] = useState<RedditPropagationResponse | null>(null);
+  const [redditError, setRedditError] = useState<string | null>(null);
+  const [isLoadingReddit, setIsLoadingReddit] = useState(false);
+  const [isLoadingX, setIsLoadingX] = useState(false);
+  const [isLoadingFacebook, setIsLoadingFacebook] = useState(false);
+  const [isLoadingInstagram, setIsLoadingInstagram] = useState(false);
+  const [isLoadingNews, setIsLoadingNews] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
-
-  const fallbackArticles: Article[] = [
-    {
-      id: 1,
-      title: 'Government Announces New Electric Vehicle Initiative for 2026',
-      source: 'Reuters',
-      date: 'March 8, 2026',
-      similarity: 0.89,
-      url: '#',
-      logo: '🗞️'
-    },
-    {
-      id: 2,
-      title: 'Major Policy Shift in Transportation Sector Expected',
-      source: 'BBC News',
-      date: 'March 9, 2026',
-      similarity: 0.82,
-      url: '#',
-      logo: '📰'
-    },
-    {
-      id: 3,
-      title: 'Electric Vehicle Mandate Delayed Until 2028',
-      source: 'Associated Press',
-      date: 'March 10, 2026',
-      similarity: 0.79,
-      url: '#',
-      logo: '📡'
-    },
-    {
-      id: 4,
-      title: 'BREAKING: Petrol Cars Banned Starting Today',
-      source: 'UnverifiedNews.com',
-      date: 'March 11, 2026',
-      similarity: 0.24,
-      url: '#',
-      logo: '⚠️'
-    }
-  ];
 
   const articles: Article[] = verificationData?.sources?.length
     ? verificationData.sources.map((source, index) => {
@@ -210,7 +260,7 @@ export function VerifyClaim() {
           logo: '📰'
         };
       })
-    : fallbackArticles;
+    : [];
 
   const timeline: TimelineEvent[] = [
     { date: 'Jan 4, 2026', event: 'Initial online mention detected', source: 'Social Media' },
@@ -219,9 +269,9 @@ export function VerifyClaim() {
     { date: 'Jan 7, 2026', event: 'Low-credibility amplification wave', source: 'Blogs & Aggregators' }
   ];
 
-  const averageSimilarity = Math.round(
-    (articles.reduce((total, article) => total + article.similarity, 0) / articles.length) * 100
-  );
+  const averageSimilarity = articles.length
+    ? Math.round((articles.reduce((total, article) => total + article.similarity, 0) / articles.length) * 100)
+    : 0;
 
   const getAverageMatchMeta = (similarity: number) => {
     if (similarity >= 85) {
@@ -295,6 +345,77 @@ export function VerifyClaim() {
 
   const trustedSources = articles.filter((article) => article.similarity >= 0.7);
   const suspiciousSources = articles.filter((article) => article.similarity < 0.7);
+  const hasThreatSignal = suspiciousSources.length > 0 || credibilityScore < 50;
+  const threatPanelTheme = hasThreatSignal
+    ? {
+        eyebrow: 'Threat Intelligence',
+        headline: 'Suspicious Domain Detected',
+        description: 'This source has a low trust profile and matches known disinformation patterns. Our AI flagged critical security and credibility concerns.',
+        badge: 'HIGH RISK',
+        domainText: 'fakepoliticsnews.com',
+        statusText: 'SUSPICIOUS',
+        score: 2,
+        topBar: 'linear-gradient(90deg, #EF4444, #F97316, #CA8A04)',
+        orbTop: 'rgba(239,68,68,0.12)',
+        orbBottom: 'linear-gradient(90deg, rgba(239,68,68,0.08), transparent)',
+        panelBorderDark: 'border-white/8',
+        panelBorderLight: 'border-[#E2E8F0]',
+        iconSurface: 'linear-gradient(135deg, rgba(239,68,68,0.2), rgba(239,68,68,0.1))',
+        iconColor: '#F87171',
+        eyebrowDark: 'text-[#F87171]',
+        eyebrowLight: 'text-[#DC2626]',
+        badgeBorder: 'rgba(239,68,68,0.3)',
+        badgeSurface: 'linear-gradient(90deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05))',
+        badgeText: '#EF4444',
+        metricCardDark: 'bg-gradient-to-br from-[#1F2937] to-[#111827] border-[#374151]/60 hover:border-[#F87171]/40 hover:shadow-[0_16px_32px_rgba(239,68,68,0.12)]',
+        metricCardLight: 'bg-gradient-to-br from-white to-[#F9FAFB] border-[#E5E7EB] hover:border-[#FCA5A5] hover:shadow-lg',
+        metricIconSurface: 'linear-gradient(135deg, rgba(239,68,68,0.2), rgba(239,68,68,0.1))',
+        metricIconHoverSurface: 'linear-gradient(135deg, rgba(239,68,68,0.3), rgba(239,68,68,0.2))',
+        metricAccent: '#EF4444',
+        metricMutedDark: 'text-[#9CA3AF]',
+        metricMutedLight: 'text-[#6B7280]',
+        buttonDark: 'bg-gradient-to-r from-[#EF4444]/12 to-[#F97316]/8 border-[#EF4444]/30 hover:border-[#EF4444]/60 hover:shadow-[0_20px_40px_rgba(239,68,68,0.15)]',
+        buttonLight: 'bg-gradient-to-r from-[#FEE2E2] to-[#FEF3C7] border-[#FCA5A5] hover:border-[#F87171] hover:shadow-lg',
+        buttonIcon: 'linear-gradient(135deg, #EF4444, #F97316)',
+        buttonTitleLight: 'text-[#7F1D1D]',
+        buttonSubtitleLight: 'text-[#B45309]',
+        actionText: '#EF4444',
+      }
+    : {
+        eyebrow: 'Threat Intelligence',
+        headline: 'No Threat Signals Detected',
+        description: 'This source currently shows a healthy trust profile. Our AI did not detect critical security or credibility threats in the available evidence.',
+        badge: 'LOW RISK',
+        domainText: 'verified-safe-source.com',
+        statusText: 'SAFE',
+        score: 8,
+        topBar: 'linear-gradient(90deg, #22C55E, #10B981, #14B8A6)',
+        orbTop: 'rgba(34,197,94,0.12)',
+        orbBottom: 'linear-gradient(90deg, rgba(34,197,94,0.08), transparent)',
+        panelBorderDark: 'border-white/8',
+        panelBorderLight: 'border-[#D1FAE5]',
+        iconSurface: 'linear-gradient(135deg, rgba(34,197,94,0.2), rgba(16,185,129,0.1))',
+        iconColor: '#22C55E',
+        eyebrowDark: 'text-[#4ADE80]',
+        eyebrowLight: 'text-[#15803D]',
+        badgeBorder: 'rgba(34,197,94,0.28)',
+        badgeSurface: 'linear-gradient(90deg, rgba(34,197,94,0.16), rgba(16,185,129,0.06))',
+        badgeText: '#22C55E',
+        metricCardDark: 'bg-gradient-to-br from-[#14231C] to-[#111827] border-[#2C4A3A]/70 hover:border-[#4ADE80]/45 hover:shadow-[0_16px_32px_rgba(34,197,94,0.12)]',
+        metricCardLight: 'bg-gradient-to-br from-white to-[#F0FDF4] border-[#BBF7D0] hover:border-[#4ADE80] hover:shadow-lg',
+        metricIconSurface: 'linear-gradient(135deg, rgba(34,197,94,0.2), rgba(16,185,129,0.1))',
+        metricIconHoverSurface: 'linear-gradient(135deg, rgba(34,197,94,0.3), rgba(16,185,129,0.18))',
+        metricAccent: '#22C55E',
+        metricMutedDark: 'text-[#9CA3AF]',
+        metricMutedLight: 'text-[#6B7280]',
+        buttonDark: 'bg-gradient-to-r from-[#22C55E]/14 to-[#14B8A6]/10 border-[#22C55E]/30 hover:border-[#4ADE80]/60 hover:shadow-[0_20px_40px_rgba(34,197,94,0.14)]',
+        buttonLight: 'bg-gradient-to-r from-[#DCFCE7] to-[#CCFBF1] border-[#86EFAC] hover:border-[#22C55E] hover:shadow-lg',
+        buttonIcon: 'linear-gradient(135deg, #22C55E, #14B8A6)',
+        buttonTitleLight: 'text-[#14532D]',
+        buttonSubtitleLight: 'text-[#0F766E]',
+        actionText: '#22C55E',
+      };
+  const ThreatPanelIcon = hasThreatSignal ? AlertTriangle : ShieldCheck;
 
   const fallbackVerdict = credibilityScore >= 75 ? 'Likely true' : credibilityScore >= 50 ? 'Uncertain' : 'Likely false';
   const verdictLabel = verificationData?.verdict || fallbackVerdict;
@@ -372,18 +493,230 @@ export function VerifyClaim() {
 
   const explanationPoints = [
     {
-      title: 'Backend summary insight',
+      title: 'System summary insight',
       body: summaryParts[0] || summaryText
     },
     {
       title: 'Cross-source consistency',
-      body: summaryParts[1] || 'The backend compares supporting coverage and computes consistency signals.'
+      body: summaryParts[1] || 'The system compares supporting coverage and computes consistency signals.'
     },
     {
       title: 'Conflicting evidence check',
       body: summaryParts[2] || 'Lower-confidence sources are separated so reviewers can quickly inspect outliers.'
     }
   ];
+
+  const redditSpreadNodes = redditData?.analysis.spread_nodes ?? 0;
+  const redditEventsCount = redditData?.events_count ?? 0;
+  const redditPatientZero = redditData?.analysis.patient_zero ?? 'No primary source identified';
+  const redditSuperSpreader = redditData?.analysis.super_spreader ?? 'No amplification leader detected';
+
+  const platformSpreadTimelines = {
+    reddit: {
+      eyebrow: 'Narrative Spread Timeline',
+      heading: 'Propagation Events',
+      events: [
+        {
+          title: 'Claim Posted',
+          detail: 'Initial mention detected across Reddit discussion threads.',
+          time: '3 hours ago',
+          metric: '1 node',
+          dotColor: '#FF4500',
+          lineColor: '#FF4500'
+        },
+        {
+          title: 'Initial Spread',
+          detail: 'Discussion branched into adjacent subreddits and repost chains.',
+          time: '2 hours ago',
+          metric: '4 nodes',
+          dotColor: '#FFB366',
+          lineColor: '#FFB366'
+        },
+        {
+          title: 'Peak Engagement',
+          detail: 'Amplification intensified as replies and reposts accelerated.',
+          time: '1 hour ago',
+          metric: '6 nodes',
+          dotColor: '#FF8A5B',
+          lineColor: '#FF8A5B'
+        },
+        {
+          title: 'Current Status',
+          detail: 'Monitoring remains active while fact-checking context is attached.',
+          time: 'Now',
+          metric: `${redditSpreadNodes || 11} total nodes tracked`,
+          dotColor: '#FBBF24',
+          lineColor: '#FBBF24'
+        }
+      ]
+    },
+    x: {
+      eyebrow: 'Narrative Spread Timeline',
+      heading: 'Post Velocity Across X',
+      events: [
+        {
+          title: 'First Post Detected',
+          detail: 'The claim appeared in an early high-visibility post.',
+          time: '4 hours ago',
+          metric: '1 post',
+          dotColor: '#1DA1F2',
+          lineColor: '#1DA1F2'
+        },
+        {
+          title: 'Retweet Burst',
+          detail: 'Shares accelerated through repost clusters and quote posts.',
+          time: '3 hours ago',
+          metric: '24 retweets',
+          dotColor: '#60A5FA',
+          lineColor: '#60A5FA'
+        },
+        {
+          title: 'Reply Volume Rose',
+          detail: 'Conversation shifted from sharing into direct replies and debate.',
+          time: '90 minutes ago',
+          metric: '57 replies',
+          dotColor: '#38BDF8',
+          lineColor: '#38BDF8'
+        },
+        {
+          title: 'Current Status',
+          detail: 'Verification labels stabilized while engagement remains active.',
+          time: 'Now',
+          metric: '47 mentions live',
+          dotColor: '#22C55E',
+          lineColor: '#22C55E'
+        }
+      ]
+    },
+    facebook: {
+      eyebrow: 'Narrative Spread Timeline',
+      heading: 'Community Distribution Flow',
+      events: [
+        {
+          title: 'Initial Share',
+          detail: 'The claim entered Facebook through a public community page.',
+          time: '5 hours ago',
+          metric: '1 share',
+          dotColor: '#1877F2',
+          lineColor: '#1877F2'
+        },
+        {
+          title: 'Page-to-Group Spread',
+          detail: 'Posts moved from pages into private and regional groups.',
+          time: '3.5 hours ago',
+          metric: '28 shares',
+          dotColor: '#60A5FA',
+          lineColor: '#60A5FA'
+        },
+        {
+          title: 'Reaction Surge',
+          detail: 'Comments and reactions increased around mixed-source posts.',
+          time: '2 hours ago',
+          metric: '124 comments',
+          dotColor: '#93C5FD',
+          lineColor: '#93C5FD'
+        },
+        {
+          title: 'Current Status',
+          detail: 'Engagement is still spreading, but source quality remains mixed.',
+          time: 'Now',
+          metric: '89 shares tracked',
+          dotColor: '#EF4444',
+          lineColor: '#EF4444'
+        }
+      ]
+    },
+    instagram: {
+      eyebrow: 'Narrative Spread Timeline',
+      heading: 'Visual Propagation Sequence',
+      events: [
+        {
+          title: 'Story Upload',
+          detail: 'The narrative first appeared through visual story content.',
+          time: '6 hours ago',
+          metric: '1 story',
+          dotColor: '#E1306C',
+          lineColor: '#E1306C'
+        },
+        {
+          title: 'Reel Reposts',
+          detail: 'Short-form reposts expanded the claim into adjacent audiences.',
+          time: '4 hours ago',
+          metric: '18 reposts',
+          dotColor: '#F472B6',
+          lineColor: '#F472B6'
+        },
+        {
+          title: 'Comment Spike',
+          detail: 'Discussion volume rose as users debated caption accuracy.',
+          time: '2 hours ago',
+          metric: '421 comments',
+          dotColor: '#FB7185',
+          lineColor: '#FB7185'
+        },
+        {
+          title: 'Current Status',
+          detail: 'Monitoring continues across posts and visual derivatives.',
+          time: 'Now',
+          metric: '63 posts active',
+          dotColor: '#FBBF24',
+          lineColor: '#FBBF24'
+        }
+      ]
+    },
+    news: {
+      eyebrow: 'Narrative Spread Timeline',
+      heading: 'Coverage Expansion Timeline',
+      events: [
+        {
+          title: 'First Pickup',
+          detail: 'Coverage started with an early outlet citing the claim.',
+          time: '8 hours ago',
+          metric: '1 article',
+          dotColor: '#FF6B00',
+          lineColor: '#FF6B00'
+        },
+        {
+          title: 'Wire Distribution',
+          detail: 'Secondary outlets reproduced the narrative through syndication.',
+          time: '5 hours ago',
+          metric: '22 articles',
+          dotColor: '#FB923C',
+          lineColor: '#FB923C'
+        },
+        {
+          title: 'Tiered Coverage Split',
+          detail: 'Top-tier and mid-tier sources diverged in framing and certainty.',
+          time: '3 hours ago',
+          metric: '47 tier-1 mentions',
+          dotColor: '#FDBA74',
+          lineColor: '#FDBA74'
+        },
+        {
+          title: 'Current Status',
+          detail: 'Coverage remains broad, with verification strongest in major outlets.',
+          time: 'Now',
+          metric: '124 articles tracked',
+          dotColor: '#22C55E',
+          lineColor: '#22C55E'
+        }
+      ]
+    }
+  } as const;
+
+  const explanationHeadline = credibilityScore >= 75
+    ? 'The claim aligns strongly with trusted reporting and the evidence pattern supports a credible verdict.'
+    : credibilityScore >= 50
+      ? 'The claim shows mixed evidence signals, so the result should be reviewed alongside the strongest sources.'
+      : 'The claim shows conflicting or weak source support, so it should be treated cautiously until stronger evidence appears.';
+
+  const practicalTakeaway = credibilityScore >= 75
+    ? 'Practical takeaway: this claim has strong support across the highest-similarity sources, but final publication decisions should still consider source context and recency.'
+    : credibilityScore >= 50
+      ? 'Practical takeaway: use this as a review queue signal. Prioritize the strongest matching sources and inspect conflicting coverage before making a final trust decision.'
+      : 'Practical takeaway: treat this claim as high risk. Escalate to manual review and rely on trusted publishers before accepting or sharing the narrative.';
+
+  const hasPendingClaimChanges = Boolean(showResults && lastAnalyzedClaim.trim() && claim.trim() !== lastAnalyzedClaim.trim());
 
   const getSourceRating = (similarity: number) => {
     if (similarity >= 0.85) return 'A+';
@@ -398,12 +731,17 @@ export function VerifyClaim() {
     if (!normalizedClaim) return;
 
     setIsAnalyzing(true);
+    setShowResults(false);
     setAnalysisError(null);
+    setActivePlatform(null);
+    setRedditData(null);
+    setRedditError(null);
 
     try {
       const response = await verifyClaim(normalizedClaim);
       setVerificationData(response);
       setAnalyzedAt(new Date());
+      setLastAnalyzedClaim(claim.trim());
       setShowResults(true);
     } catch (error) {
       setAnalysisError(error instanceof Error ? error.message : 'Failed to connect to backend.');
@@ -413,8 +751,68 @@ export function VerifyClaim() {
     }
   };
 
-  const handleAnalyze = async () => {
-    await runClaimVerification(claim);
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const imageData = loadEvent.target?.result;
+
+      if (typeof imageData === 'string') {
+        setUploadedImage(imageData);
+      }
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const handleClaimKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+
+    event.preventDefault();
+
+    if (!isAnalyzing && claim.trim()) {
+      void handleAnalyze();
+    }
+  };
+
+  const handleOpenPlatform = async (platform: 'reddit' | 'x' | 'facebook' | 'instagram' | 'news') => {
+    setActivePlatform(activePlatform === platform ? null : platform);
+
+    if (activePlatform === platform) return;
+
+    if (platform === 'reddit' && !claim.trim()) return;
+
+    if (platform === 'reddit' && !isLoadingReddit && !redditData) {
+      setIsLoadingReddit(true);
+      try {
+        const response = await analyzeRedditPropagation({
+          query: claim.trim(),
+          limit: 10,
+          include_comments: true,
+          comments_per_post: 5,
+        });
+        setRedditData(response);
+      } catch (error) {
+        // Error handled in UI
+      } finally {
+        setIsLoadingReddit(false);
+      }
+    } else if (platform === 'x' && !isLoadingX) {
+      setIsLoadingX(true);
+      setTimeout(() => setIsLoadingX(false), 500);
+    } else if (platform === 'facebook' && !isLoadingFacebook) {
+      setIsLoadingFacebook(true);
+      setTimeout(() => setIsLoadingFacebook(false), 500);
+    } else if (platform === 'instagram' && !isLoadingInstagram) {
+      setIsLoadingInstagram(true);
+      setTimeout(() => setIsLoadingInstagram(false), 500);
+    } else if (platform === 'news' && !isLoadingNews) {
+      setIsLoadingNews(true);
+      setTimeout(() => setIsLoadingNews(false), 500);
+    }
   };
 
   useEffect(() => {
@@ -425,48 +823,12 @@ export function VerifyClaim() {
 
   useEffect(() => {
     if (!showResults) return;
-    resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const frame = window.requestAnimationFrame(() => {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [showResults]);
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsExtractingText(true);
-    setAnalysisError(null);
-    setShowResults(false);
-
-    try {
-      const imageDataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (loadEvent) => resolve(String(loadEvent.target?.result || ''));
-        reader.onerror = () => reject(new Error('Failed to read image file.'));
-        reader.readAsDataURL(file);
-      });
-      const [metadata, base64Data = ''] = imageDataUrl.split(',', 2);
-      const contentTypeMatch = metadata.match(/^data:(.*?);base64$/);
-      const contentType = contentTypeMatch?.[1] || file.type;
-
-      setUploadedImage(imageDataUrl);
-
-      const response = await extractTextFromImage({
-        imageData: base64Data,
-        contentType,
-      });
-      const extractedClaim = response.text.trim();
-
-      setOcrText(extractedClaim);
-      setClaim(extractedClaim);
-      await runClaimVerification(extractedClaim);
-    } catch (error) {
-      setOcrText('');
-      setVerificationData(null);
-      setAnalysisError(error instanceof Error ? error.message : 'Failed to extract text from image.');
-    } finally {
-      setIsExtractingText(false);
-      e.target.value = '';
-    }
-  };
 
   return (
     <div className={`min-h-screen transition-colors ${isDarkMode ? 'bg-[#0F172A]' : 'bg-[#F8FAFC]'}`}>
@@ -476,76 +838,119 @@ export function VerifyClaim() {
         <div className="max-w-6xl mx-auto">
           {/* Header */}
           <div className="mb-8">
-            <h1 className={`text-3xl mb-2 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Verify Claim</h1>
+            <h1 className={`text-3xl mb-2 flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+              <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${isDarkMode ? 'bg-[#1E293B] text-[#22D3EE]' : 'bg-[#EFF6FF] text-[#2563EB]'}`}>
+                <ScanSearch className="w-5 h-5" />
+              </span>
+              Verify Claim
+            </h1>
             <p className={isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}>Enter a news claim or upload an image to verify its authenticity</p>
           </div>
 
           {/* Input Section */}
-          <div className={`rounded-2xl border p-8 mb-8 shadow-sm transition-colors ${
-            isDarkMode ? 'bg-[#1E293B] border-[#334155]' : 'bg-white border-[#E2E8F0]'
+          <div className={`relative mb-8 overflow-hidden rounded-3xl border p-6 sm:p-8 transition-colors ${
+            isDarkMode
+              ? 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.16),transparent_42%),linear-gradient(135deg,rgba(9,16,34,0.98),rgba(21,32,52,0.95))] border-white/10 shadow-[0_28px_80px_rgba(2,6,23,0.5)]'
+              : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_42%),linear-gradient(180deg,#FFFFFF,#F8FAFC)] border-[#E2E8F0] shadow-[0_16px_45px_rgba(15,23,42,0.09)]'
           }`}>
-            <div className="mb-6">
-              <label className={`text-sm mb-2 block ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Claim to Verify</label>
-              <div className="relative">
+            <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-[#3B82F6]/14 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-16 -left-16 h-56 w-56 rounded-full bg-[#22D3EE]/10 blur-3xl" />
+            <div className="pointer-events-none absolute left-0 top-0 h-px w-full bg-[linear-gradient(90deg,transparent,#22D3EE,transparent)] opacity-40" />
+
+            <div className="relative space-y-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className={`text-[20px] font-semibold uppercase tracking-[0.12em] flex items-center gap-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                    <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${isDarkMode ? 'bg-[#1E293B] text-[#22D3EE]' : 'bg-[#EFF6FF] text-[#2563EB]'}`}>
+                      <ShieldCheck className="w-4 h-4" />
+                    </span>
+                    Credibility Visualization
+                  </p>
+                </div>
+                <div className={`rounded-full border px-3 py-1 text-xs ${isDarkMode ? 'border-white/10 bg-white/5 text-[#93C5FD]' : 'border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]'}`}>
+                  Fact-check Assistant
+                </div>
+              </div>
+
+              <div className={`rounded-2xl border p-3 ${isDarkMode ? 'bg-[#0A1226]/90 border-[#1E293B]' : 'bg-white/95 border-[#E2E8F0]'}`}>
+                <label className={`mb-2 block text-xs font-semibold uppercase tracking-[0.14em] ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Claim to Verify</label>
                 <textarea
                   value={claim}
                   onChange={(e) => setClaim(e.target.value)}
+                  onKeyDown={handleClaimKeyDown}
                   placeholder="Enter a news claim to verify..."
-                  className={`w-full px-6 py-4 border rounded-xl outline-none focus:border-[#3B82F6] focus:ring-2 focus:ring-[#3B82F6]/20 transition-all resize-none ${
-                    isDarkMode ? 'bg-[#0F172A] border-[#334155] text-white placeholder:text-[#64748B]' : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#0F172A] placeholder:text-[#94A3B8]'
+                  className={`w-full resize-none rounded-xl border px-4 py-4 text-[15px] leading-relaxed outline-none transition-all focus:border-[#3B82F6] focus:ring-2 focus:ring-[#3B82F6]/20 ${
+                    isDarkMode
+                      ? 'bg-[#0B1120] border-[#1E293B] text-white placeholder:text-[#475569] focus:bg-[#0D1526]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#0F172A] placeholder:text-[#94A3B8]'
                   }`}
                   rows={4}
                 />
+                <p className={`mt-2 text-xs ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                  Press Enter to analyze immediately. Use Shift+Enter for a new line.
+                </p>
               </div>
+
+              {hasPendingClaimChanges && !isAnalyzing && (
+                <div className={`rounded-xl border px-4 py-3 text-sm ${
+                  isDarkMode
+                    ? 'border-[#22D3EE]/25 bg-[#22D3EE]/10 text-[#BAE6FD]'
+                    : 'border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]'
+                }`}>
+                  The claim input changed. Run Analyze Claim to reload the verification UI with the new data.
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                  onClick={() => void handleAnalyze()}
+                  disabled={isAnalyzing || !claim.trim()}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#3B82F6] to-[#22D3EE] px-6 py-3 font-medium text-white transition-all hover:scale-[1.01] hover:shadow-lg hover:shadow-[#3B82F6]/30 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 disabled:hover:shadow-none sm:w-auto"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <div className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      <span>Analyzing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-5 w-5" />
+                      <span>Analyze Claim</span>
+                      <ArrowRight className="h-5 w-5" />
+                    </>
+                  )}
+                </button>
+
+                <div className={`hidden text-sm sm:block ${isDarkMode ? 'text-[#475569]' : 'text-[#CBD5E1]'}`}>or</div>
+
+                <label className={`inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border px-5 py-3 font-medium transition-all hover:border-[#3B82F6] hover:text-[#3B82F6] sm:w-auto ${
+                  isDarkMode
+                    ? 'border-[#1E293B] bg-[#0B1120] text-[#64748B] hover:bg-[#0D1526]'
+                    : 'border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B] hover:bg-white'
+                }`}>
+                  <Upload className="h-4 w-4" />
+                  <span>Upload Image</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {analysisError && (
+                <div className="mt-4 rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#FCA5A5]">
+                  {analysisError}
+                </div>
+              )}
+
+              {verificationData?.warning && (
+                <div className="mt-4 rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 py-3 text-sm text-[#FCD34D]">
+                  {verificationData.warning}
+                </div>
+              )}
             </div>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={handleAnalyze}
-                disabled={isAnalyzing || isExtractingText || !claim.trim()}
-                className="px-6 py-3 bg-gradient-to-r from-[#3B82F6] to-[#22D3EE] text-white rounded-xl hover:shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isAnalyzing ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>Analyzing...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-5 h-5" />
-                    <span>Analyze Claim</span>
-                    <ArrowRight className="w-5 h-5" />
-                  </>
-                )}
-              </button>
-
-              <div className={`text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>or</div>
-
-              <label className={`px-6 py-3 border-2 border-dashed rounded-xl hover:border-[#3B82F6] hover:text-[#3B82F6] transition-all flex items-center gap-2 cursor-pointer ${
-                isDarkMode ? 'border-[#475569] text-[#94A3B8]' : 'border-[#CBD5E1] text-[#64748B]'
-              }`}>
-                <Upload className="w-5 h-5" />
-                <span>{isExtractingText ? 'Extracting Text...' : 'Upload Image'}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            {analysisError && (
-              <div className="mt-4 rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#FCA5A5]">
-                {analysisError}
-              </div>
-            )}
-
-            {verificationData?.warning && (
-              <div className="mt-4 rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/10 px-4 py-3 text-sm text-[#FCD34D]">
-                {verificationData.warning}
-              </div>
-            )}
           </div>
 
           {/* Results */}
@@ -564,7 +969,7 @@ export function VerifyClaim() {
                   : 'bg-white border-[#E2E8F0]'
               }`}>
                 <div className="absolute -right-20 top-0 h-64 w-64 rounded-full bg-[#22D3EE]/10 blur-3xl" />
-                <div className="absolute left-0 top-0 h-px w-full bg-[linear-gradient(90deg,transparent,#22D3EE,transparent)] opacity-40" />
+                <div className="absolute left-0 top-0 h-px w-full bg-[linear-gradient(90deg,transparent,#FACC15,transparent)] opacity-70" />
 
                 <div className="relative space-y-8">
                   <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -609,16 +1014,20 @@ export function VerifyClaim() {
                             <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Analyzed Claim</p>
                             <p className={`text-lg leading-relaxed ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{claim}</p>
                           </div>
-                          <div className="min-w-[220px] rounded-2xl border border-white/10 bg-[#0B1120]/70 p-4 backdrop-blur-xl">
+                          <div className={`min-w-[220px] rounded-2xl border p-4 ${
+                            isDarkMode
+                              ? 'border-white/10 bg-[#0B1120]/70 backdrop-blur-xl'
+                              : 'border-[#CBD5E1] bg-white shadow-sm'
+                          }`}>
                             <div className="flex items-center gap-2 mb-2">
                               <span className="relative flex h-2.5 w-2.5">
                                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#22C55E] opacity-60"></span>
                                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#22C55E]"></span>
                               </span>
-                              <p className="text-sm text-[#22C55E]">{verificationVerdict.status}</p>
+                              <p className={`text-sm ${isDarkMode ? 'text-[#22C55E]' : 'text-[#16A34A]'}`}>{verificationVerdict.status}</p>
                             </div>
-                            <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
-                              <CalendarClock className="w-4 h-4 text-[#22D3EE]" />
+                            <div className={`flex items-center gap-2 text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>
+                              <CalendarClock className={`w-4 h-4 ${isDarkMode ? 'text-[#22D3EE]' : 'text-[#0891B2]'}`} />
                               <span>{analyzedTimestamp}</span>
                             </div>
                             <div className="mt-3 inline-flex items-center rounded-full border px-3 py-1 text-xs"
@@ -647,7 +1056,7 @@ export function VerifyClaim() {
                           </div>
                         </div>
                         <div className="flex flex-col items-center justify-center gap-4 xl:flex-row xl:items-center xl:justify-between">
-                          <CredibilityGauge score={credibilityScore} />
+                          <CredibilityGauge score={credibilityScore} isDarkMode={isDarkMode} />
                           <div className="w-full max-w-xs space-y-3">
                             <div className="rounded-2xl border border-white/8 bg-white/5 p-4 backdrop-blur-md">
                               <p className={`text-xs uppercase tracking-[0.16em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Verdict</p>
@@ -684,48 +1093,63 @@ export function VerifyClaim() {
               </div>
 
               {/* AI Explanation */}
-              <div className={`rounded-2xl border p-8 ${
-                isDarkMode
-                  ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 backdrop-blur-xl shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
-                  : 'bg-white border-[#E2E8F0]'
-              }`}>
-                <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-                  <div className="w-12 h-12 bg-gradient-to-br from-[#3B82F6] to-[#22D3EE] rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#22D3EE]/20">
-                    <Sparkles className="w-5 h-5 text-white" />
+              <div className={`rounded-2xl border p-6 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B82F6] to-[#22D3EE]">
+                    <Bot className="w-5 h-5 text-white" />
                   </div>
-                  <div className="flex-1 space-y-5">
-                    <div>
-                      <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>AI Reasoning Panel</p>
-                      <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Why OriginX considers this claim credible</h3>
+                  <div>
+                    <p className={`text-xs uppercase tracking-[0.18em] ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Explanation Summary</p>
+                    <h2 className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>AI Explanation</h2>
+                  </div>
+                </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-[#22D3EE]/15 bg-gradient-to-br from-[#3B82F6]/10 to-[#22D3EE]/5 p-5"
+                >
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#93C5FD]' : 'text-[#1D4ED8]'}`}>AI Verdict</p>
+                        <h3 className={`text-lg ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                          {explanationHeadline}
+                        </h3>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <span className="inline-flex items-center rounded-full border border-[#F59E0B]/20 bg-[#F59E0B]/10 px-3 py-1 text-xs text-[#F59E0B]">Confidence: {credibilityScore}%</span>
+                        <span
+                          className="inline-flex items-center rounded-full border px-3 py-1 text-xs"
+                          style={{ borderColor: `${verificationVerdict.accent}33`, color: verificationVerdict.accent, backgroundColor: `${verificationVerdict.accent}18` }}
+                        >
+                          Verdict: {verificationVerdict.label}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-[#22C55E]/20 bg-[#22C55E]/10 px-3 py-1 text-xs text-[#22C55E]">Trusted Sources: {trustedSources.length}</span>
+                        <span className="inline-flex items-center rounded-full border border-[#EF4444]/20 bg-[#EF4444]/10 px-3 py-1 text-xs text-[#EF4444]">Conflicting Sources: {suspiciousSources.length}</span>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {explanationPoints.map((point, index) => (
-                        <motion.div
+                    <p className={`leading-relaxed ${isDarkMode ? 'text-[#CBD5E1]' : 'text-[#475569]'}`}>
+                      {summaryText}
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {explanationPoints.map((point) => (
+                        <div
                           key={point.title}
-                          initial={{ opacity: 0, y: 16 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: index * 0.12 }}
-                          className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-[#F8FAFC] border-[#E2E8F0]'}`}
+                          className={`rounded-xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white/80 border-[#E2E8F0]'}`}
                         >
                           <p className={`mb-2 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{point.title}</p>
                           <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>{point.body}</p>
-                        </motion.div>
+                        </div>
                       ))}
                     </div>
 
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.35 }}
-                      className="rounded-2xl border border-[#22D3EE]/15 bg-gradient-to-br from-[#3B82F6]/10 to-[#22D3EE]/5 p-5"
-                    >
-                      <p className={`leading-relaxed ${isDarkMode ? 'text-[#E2E8F0]' : 'text-[#334155]'}`}>
-                        Verdict summary: {summaryText}
-                      </p>
-                    </motion.div>
+                    <p className={`leading-relaxed ${isDarkMode ? 'text-[#CBD5E1]' : 'text-[#475569]'}`}>
+                      {practicalTakeaway}
+                    </p>
                   </div>
-                </div>
+                </motion.div>
               </div>
 
               {/* Evidence Articles */}
@@ -752,7 +1176,11 @@ export function VerifyClaim() {
                       <ShieldCheck className="w-5 h-5 text-[#22C55E]" />
                     </div>
                     <div className="space-y-4">
-                      {trustedSources.map((article, index) => (
+                      {trustedSources.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-center">
+                          <p className={`text-sm ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>No trusted sources found for this claim.</p>
+                        </div>
+                      ) : trustedSources.map((article, index) => (
                         <motion.div
                           key={article.id}
                           initial={{ opacity: 0, x: -16 }}
@@ -794,7 +1222,11 @@ export function VerifyClaim() {
                       <ShieldAlert className="w-5 h-5 text-[#EF4444]" />
                     </div>
                     <div className="space-y-4">
-                      {suspiciousSources.map((article, index) => (
+                      {suspiciousSources.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-center">
+                          <p className={`text-sm ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>No suspicious sources found for this claim.</p>
+                        </div>
+                      ) : suspiciousSources.map((article, index) => (
                         <motion.div
                           key={article.id}
                           initial={{ opacity: 0, x: 16 }}
@@ -848,11 +1280,46 @@ export function VerifyClaim() {
                   </div>
 
                   <div className="flex items-stretch gap-3 lg:flex-nowrap lg:justify-end">
-                    <div className="min-w-[170px] rounded-xl px-4 py-3 border bg-gradient-to-br from-[#3B82F6]/12 to-[#3B82F6]/5 border-[#3B82F6]/20">
+                    <div 
+                      className="min-w-[170px] rounded-xl px-4 py-3 border bg-gradient-to-br from-[#3B82F6]/12 to-[#3B82F6]/5 border-[#3B82F6]/20 transition-all duration-300 cursor-pointer hover:border-[#3B82F6]/60"
+                      style={{ borderColor: '#3B82F6' + '33' }}
+                      onMouseEnter={(e) => {
+                        const target = e.currentTarget as HTMLDivElement;
+                        target.style.borderColor = '#3B82F6';
+                      }}
+                      onMouseLeave={(e) => {
+                        const target = e.currentTarget as HTMLDivElement;
+                        target.style.borderColor = '#3B82F6' + '33';
+                      }}
+                    >
                       <p className={`text-xs uppercase tracking-[0.18em] ${isDarkMode ? 'text-[#93C5FD]' : 'text-[#1D4ED8]'}`}>Sources Compared</p>
                       <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{articles.length}</p>
                     </div>
-                    <div className={`min-w-[170px] rounded-xl px-4 py-3 border ${getAverageMatchMeta(averageSimilarity).container}`}>
+                    <div 
+                      className={`min-w-[170px] rounded-xl px-4 py-3 border transition-all duration-300 cursor-pointer ${getAverageMatchMeta(averageSimilarity).container}`}
+                      onMouseEnter={(e) => {
+                        const target = e.currentTarget as HTMLDivElement;
+                        const meta = getAverageMatchMeta(averageSimilarity);
+                        // Extract accent color from container class
+                        if (averageSimilarity >= 70) {
+                          target.style.borderColor = '#22C55E';
+                        } else if (averageSimilarity >= 40) {
+                          target.style.borderColor = '#F59E0B';
+                        } else {
+                          target.style.borderColor = '#EF4444';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        const target = e.currentTarget as HTMLDivElement;
+                        if (averageSimilarity >= 70) {
+                          target.style.borderColor = '#22C55E' + '33';
+                        } else if (averageSimilarity >= 40) {
+                          target.style.borderColor = '#F59E0B' + '33';
+                        } else {
+                          target.style.borderColor = '#EF4444' + '33';
+                        }
+                      }}
+                    >
                       <p className={`text-xs uppercase tracking-[0.18em] ${getAverageMatchMeta(averageSimilarity).title}`}>Average Match</p>
                       <p className={`text-lg ${getAverageMatchMeta(averageSimilarity).value}`}>{averageSimilarity}%</p>
                       <p className={`text-xs mt-1 ${getAverageMatchMeta(averageSimilarity).title}`}>{getAverageMatchMeta(averageSimilarity).label}</p>
@@ -861,7 +1328,11 @@ export function VerifyClaim() {
                 </div>
 
                 <div className="space-y-4">
-                  {articles.map((article, index) => (
+                  {articles.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <p className={`text-sm ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>No articles available to compare for this claim.</p>
+                    </div>
+                  ) : articles.map((article, index) => (
                     <motion.div
                       key={article.id}
                       initial={{ opacity: 0, y: 18 }}
@@ -964,85 +1435,143 @@ export function VerifyClaim() {
               </div>
 
               {/* Fake Website Detection */}
-              <div className="bg-gradient-to-br from-[#FEE2E2] to-[#FEF2F2] border-2 border-[#FCA5A5] rounded-2xl p-8">
-                <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 bg-[#EF4444] rounded-xl flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="w-5 h-5 text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-lg text-[#991B1B] mb-3">Suspicious Domain Detected</h3>
-                    
-                    <div className="bg-white rounded-xl p-4 mb-4">
-                      <p className="text-sm text-[#64748B] mb-1">Domain:</p>
-                      <p className="text-[#EF4444] font-mono">fakepoliticsnews.com</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-white rounded-xl p-4">
-                        <p className="text-sm text-[#64748B] mb-1">Status:</p>
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-[#EF4444] rounded-full animate-pulse"></div>
-                          <p className="text-[#EF4444]">Suspicious Domain</p>
-                        </div>
-                      </div>
-                      
-                      <div className="bg-white rounded-xl p-4">
-                        <p className="text-sm text-[#64748B] mb-1">VirusTotal Score:</p>
-                        <p className="text-[#EF4444]">2/10</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 p-4 bg-white rounded-xl">
-                      <p className="text-sm text-[#64748B]">
-                        This domain has been flagged by our threat intelligence system. It's known for spreading misinformation 
-                        and has a low credibility rating. We recommend verifying information from this source with trusted news outlets.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Language Translation */}
-              <div className={`rounded-2xl border p-8 shadow-sm transition-colors ${
-                isDarkMode ? 'bg-[#1E293B] border-[#334155]' : 'bg-white border-[#E2E8F0]'
+              <div className={`relative overflow-hidden rounded-[28px] border ${
+                isDarkMode
+                  ? 'bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(30,41,59,0.94))] border-white/8 shadow-[0_24px_60px_rgba(2,6,23,0.35)]'
+                  : 'bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.96))] border-[#E2E8F0] shadow-sm'
               }`}>
-                <div className="flex items-center gap-2 mb-6">
-                  <Globe className="w-5 h-5 text-[#3B82F6]" />
-                  <h2 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Language Translation</h2>
-                </div>
+                <div className="absolute inset-x-0 top-0 h-1.5" style={{ background: threatPanelTheme.topBar }} />
+                <div className="absolute -right-12 -top-12 h-48 w-48 rounded-full blur-3xl pointer-events-none" style={{ backgroundColor: threatPanelTheme.orbTop }} />
+                <div className="absolute -left-20 bottom-0 h-40 w-64 rounded-full blur-3xl pointer-events-none" style={{ background: threatPanelTheme.orbBottom }} />
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <p className={`text-sm mb-3 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Select Language:</p>
-                    <select
-                      value={selectedLanguage}
-                      onChange={(e) => setSelectedLanguage(e.target.value)}
-                      className={`w-full px-4 py-3 border rounded-xl outline-none focus:border-[#3B82F6] focus:ring-2 focus:ring-[#3B82F6]/20 transition-all ${
-                        isDarkMode ? 'bg-[#0F172A] border-[#334155] text-white' : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#0F172A]'
-                      }`}
-                    >
-                      <option>English</option>
-                      <option>Hindi</option>
-                      <option>Spanish</option>
-                      <option>French</option>
-                      <option>German</option>
-                      <option>Arabic</option>
-                      <option>Chinese</option>
-                      <option>Japanese</option>
-                    </select>
-                  </div>
-                  
-                  <div className="bg-gradient-to-br from-[#3B82F6]/5 to-[#22D3EE]/5 border border-[#3B82F6]/20 rounded-xl p-4">
-                    <div className="flex items-start gap-3">
-                      <CheckCircle2 className="w-5 h-5 text-[#22C55E] flex-shrink-0 mt-0.5" />
-                      <div>
-                        <p className={`text-sm mb-1 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Auto-Translation Enabled</p>
-                        <p className={`text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>
-                          Claims are automatically translated before verification analysis to ensure accurate results across all supported languages.
+                <div className="relative p-8 sm:p-10">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex items-start gap-5 flex-1">
+                      <div
+                        className="flex h-14 w-14 items-center justify-center rounded-2xl ring-1 flex-shrink-0"
+                        style={{ background: threatPanelTheme.iconSurface, color: threatPanelTheme.iconColor, borderColor: threatPanelTheme.badgeBorder }}
+                      >
+                        <ThreatPanelIcon className="h-6 w-6" />
+                      </div>
+                      <div className="flex-1">
+                        <p className={`text-xs font-semibold uppercase tracking-widest ${isDarkMode ? threatPanelTheme.eyebrowDark : threatPanelTheme.eyebrowLight}`}>
+                          {hasThreatSignal ? '⚠ ' : '✓ '}{threatPanelTheme.eyebrow}
+                        </p>
+                        <h3 className={`mt-2 text-2xl font-bold leading-tight ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                          {threatPanelTheme.headline}
+                        </h3>
+                        <p className={`mt-3 max-w-2xl text-sm leading-relaxed ${isDarkMode ? 'text-[#A1A5B0]' : 'text-[#6B7280]'}`}>
+                          {threatPanelTheme.description}
                         </p>
                       </div>
                     </div>
+
+                    <div
+                      className="inline-flex items-center gap-2.5 self-start rounded-full border px-4 py-2 text-xs font-semibold backdrop-blur-sm"
+                      style={{ borderColor: threatPanelTheme.badgeBorder, background: threatPanelTheme.badgeSurface, color: threatPanelTheme.badgeText }}
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full animate-pulse" style={{ backgroundColor: threatPanelTheme.badgeText }} />
+                      {threatPanelTheme.badge}
+                    </div>
                   </div>
+
+                  <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_0.9fr_0.85fr]">
+                    <div className={`group rounded-2xl border p-5 cursor-pointer transition-all duration-300 hover:-translate-y-1 ${
+                      isDarkMode
+                        ? threatPanelTheme.metricCardDark
+                        : threatPanelTheme.metricCardLight
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl transition-all" style={{ background: threatPanelTheme.metricIconSurface, color: threatPanelTheme.metricAccent }}>
+                          <GlobeIcon className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`text-xs font-semibold uppercase tracking-wider ${isDarkMode ? threatPanelTheme.metricMutedDark : threatPanelTheme.metricMutedLight}`}>
+                            Domain
+                          </p>
+                          <p className="mt-2.5 truncate font-mono text-lg font-bold" style={{ color: threatPanelTheme.metricAccent }}>{threatPanelTheme.domainText}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={`group rounded-2xl border p-5 cursor-pointer transition-all duration-300 hover:-translate-y-1 ${
+                      isDarkMode
+                        ? threatPanelTheme.metricCardDark
+                        : threatPanelTheme.metricCardLight
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl transition-all" style={{ background: threatPanelTheme.metricIconSurface, color: threatPanelTheme.metricAccent }}>
+                          <Shield className="h-5 w-5" />
+                        </div>
+                        <div className="flex-1">
+                          <p className={`text-xs font-semibold uppercase tracking-wider ${isDarkMode ? threatPanelTheme.metricMutedDark : threatPanelTheme.metricMutedLight}`}>
+                            Status
+                          </p>
+                          <div className="mt-2.5 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-bold border" style={{ background: threatPanelTheme.badgeSurface, color: threatPanelTheme.metricAccent, borderColor: threatPanelTheme.badgeBorder }}>
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: threatPanelTheme.metricAccent }} />
+                            {threatPanelTheme.statusText}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={`group rounded-2xl border p-5 cursor-pointer transition-all duration-300 hover:-translate-y-1 ${
+                      isDarkMode
+                        ? threatPanelTheme.metricCardDark
+                        : threatPanelTheme.metricCardLight
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl transition-all" style={{ background: threatPanelTheme.metricIconSurface, color: threatPanelTheme.metricAccent }}>
+                          <FileBarChart2 className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className={`text-xs font-semibold uppercase tracking-wider ${isDarkMode ? threatPanelTheme.metricMutedDark : threatPanelTheme.metricMutedLight}`}>
+                            Risk Score
+                          </p>
+                          <p className={`mt-2.5 text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                            <span style={{ color: threatPanelTheme.metricAccent }}>{threatPanelTheme.score}</span>
+                            <span className={isDarkMode ? 'text-[#4B5563]' : 'text-[#9CA3AF]'}>/10</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate('/url-investigation', {
+                      state: {
+                        initialUrl: 'https://fakepoliticsnews.com',
+                        source: 'verify-claim',
+                      },
+                    })}
+                    className={`mt-8 flex w-full items-center justify-between rounded-2xl border px-6 py-5 text-left transition-all duration-300 hover:-translate-y-1 font-semibold ${
+                      isDarkMode
+                        ? threatPanelTheme.buttonDark
+                        : threatPanelTheme.buttonLight
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl text-white shadow-lg" style={{ background: threatPanelTheme.buttonIcon, boxShadow: `0 12px 24px ${threatPanelTheme.badgeBorder}` }}>
+                        <ScanSearch className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className={`text-base font-bold ${isDarkMode ? 'text-white' : threatPanelTheme.buttonTitleLight}`}>
+                          Run Deep URL Investigation
+                        </p>
+                        <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-[#9CA3AF]' : threatPanelTheme.buttonSubtitleLight}`}>
+                          SSL verification • DNS lookup • Domain history • Trust scoring
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: threatPanelTheme.actionText }}>
+                      Investigate
+                      <span className="flex h-8 w-8 items-center justify-center rounded-xl" style={{ backgroundColor: `${threatPanelTheme.actionText}18` }}>
+                        <ArrowRight className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </button>
                 </div>
               </div>
 
@@ -1052,12 +1581,44 @@ export function VerifyClaim() {
               }`}>
                 <h2 className={`text-xl mb-6 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Cross-Platform Verification</h2>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                  <motion.button
+                    type="button"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 }}
+                    onClick={() => void handleOpenPlatform('reddit')}
+                    className={`bg-gradient-to-br from-[#FF6A33]/10 to-[#FF4500]/5 border rounded-xl p-6 text-left cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#FF4500]/10 ${
+                      activePlatform === 'reddit' ? 'border-[#FF4500]/50 shadow-[0_0_0_1px_rgba(255,69,0,0.24)]' : 'border-[#FF4500]/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 bg-[#FF4500] rounded-xl flex items-center justify-center">
+                        <span className="text-white text-sm font-semibold leading-none">r/</span>
+                      </div>
+                      <div>
+                        <p className={`text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Reddit</p>
+                        <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                          {isLoadingReddit ? 'Loading...' : `${redditSpreadNodes} Nodes`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${redditError ? 'bg-[#EF4444]' : isLoadingReddit ? 'bg-[#FBBF24]' : 'bg-[#22C55E]'}`}></div>
+                      <p className={`text-sm ${redditError ? 'text-[#EF4444]' : isLoadingReddit ? 'text-[#FBBF24]' : 'text-[#22C55E]'}`}>
+                        {redditError ? 'Load Failed' : isLoadingReddit ? 'Scanning Reddit' : 'Propagation Ready'}
+                      </p>
+                    </div>
+                  </motion.button>
+
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.1 }}
-                    className="bg-gradient-to-br from-[#1DA1F2]/10 to-[#1DA1F2]/5 border border-[#1DA1F2]/20 rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#1DA1F2]/10"
+                    onClick={() => setActivePlatform('x')}
+                    className={`bg-gradient-to-br from-[#1DA1F2]/10 to-[#1DA1F2]/5 border rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#1DA1F2]/10 ${
+                      activePlatform === 'x' ? 'border-[#1DA1F2]/50 shadow-[0_0_0_1px_rgba(29,161,242,0.2)]' : 'border-[#1DA1F2]/20'
+                    }`}
                   >
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center">
@@ -1078,7 +1639,10 @@ export function VerifyClaim() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.2 }}
-                    className="bg-gradient-to-br from-[#1877F2]/10 to-[#1877F2]/5 border border-[#1877F2]/20 rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#1877F2]/10"
+                    onClick={() => setActivePlatform('facebook')}
+                    className={`bg-gradient-to-br from-[#1877F2]/10 to-[#1877F2]/5 border rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#1877F2]/10 ${
+                      activePlatform === 'facebook' ? 'border-[#1877F2]/50 shadow-[0_0_0_1px_rgba(24,119,242,0.2)]' : 'border-[#1877F2]/20'
+                    }`}
                   >
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-10 h-10 bg-[#1877F2] rounded-xl flex items-center justify-center">
@@ -1099,7 +1663,10 @@ export function VerifyClaim() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3 }}
-                    className="bg-gradient-to-br from-[#E1306C]/10 to-[#F77737]/5 border border-[#E1306C]/20 rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#E1306C]/10"
+                    onClick={() => setActivePlatform('instagram')}
+                    className={`bg-gradient-to-br from-[#E1306C]/10 to-[#F77737]/5 border rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#E1306C]/10 ${
+                      activePlatform === 'instagram' ? 'border-[#E1306C]/50 shadow-[0_0_0_1px_rgba(225,48,108,0.2)]' : 'border-[#E1306C]/20'
+                    }`}
                   >
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-10 h-10 bg-[#E1306C] rounded-xl flex items-center justify-center">
@@ -1120,7 +1687,10 @@ export function VerifyClaim() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.4 }}
-                    className="bg-gradient-to-br from-[#FF6B00]/10 to-[#FF6B00]/5 border border-[#FF6B00]/20 rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#FF6B00]/10"
+                    onClick={() => setActivePlatform('news')}
+                    className={`bg-gradient-to-br from-[#FF6B00]/10 to-[#FF6B00]/5 border rounded-xl p-6 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#FF6B00]/10 ${
+                      activePlatform === 'news' ? 'border-[#FF6B00]/50 shadow-[0_0_0_1px_rgba(255,107,0,0.2)]' : 'border-[#FF6B00]/20'
+                    }`}
                   >
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-10 h-10 bg-[#FF6B00] rounded-xl flex items-center justify-center">
@@ -1138,10 +1708,343 @@ export function VerifyClaim() {
                   </motion.div>
                 </div>
 
+                {activePlatform === 'reddit' && (
+                  <div className={`mt-6 rounded-[28px] border p-8 relative overflow-hidden ${
+                    isDarkMode
+                      ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                  }`}>
+                    <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-[#FF4500]/10 blur-3xl" />
+                    <div className="relative space-y-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Reddit Propagation</p>
+                          <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Narrative Spread Network</h3>
+                        </div>
+                        <div className="inline-flex items-center rounded-full border border-[#FF4500]/20 bg-[#FF4500]/10 px-3 py-1 text-xs text-[#FF8A5B]">
+                          Query: {claim.length > 48 ? `${claim.slice(0, 48)}...` : claim}
+                        </div>
+                      </div>
+
+                      {redditError && (
+                        <div className="rounded-2xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#FCA5A5]">
+                          {redditError}
+                        </div>
+                      )}
+
+                      <div className={`rounded-[28px] border overflow-hidden ${
+                        isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'
+                      }`}>
+                        {/* Network Graph Header */}
+                        <div className="flex items-center justify-between gap-4 p-8 pb-6 border-b border-white/10">
+                          <div>
+                            <p className={`text-xs uppercase tracking-[0.24em] mb-2 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Narrative Spread Nodes</p>
+                            <p className={`text-3xl leading-none ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                              {isLoadingReddit ? '...' : redditSpreadNodes}
+                            </p>
+                          </div>
+                          <div className="flex h-16 w-16 items-center justify-center rounded-[20px] bg-[#FF4500]/10">
+                            <ShieldAlert className="w-8 h-8 text-[#FF8A5B]" />
+                          </div>
+                        </div>
+
+                        {/* Network Graph Visualization */}
+                        <div className="h-[350px] relative overflow-hidden p-6">
+                          {/* Background grid effect */}
+                          <div className="absolute inset-0 opacity-5">
+                            <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                              <defs>
+                                <pattern id="grid-reddit" width="10" height="10" patternUnits="userSpaceOnUse">
+                                  <path d="M 10 0 L 0 0 0 10" fill="none" stroke="currentColor" strokeWidth="0.5" />
+                                </pattern>
+                              </defs>
+                              <rect width="100" height="100" fill="url(#grid-reddit)" />
+                            </svg>
+                          </div>
+
+                          {/* Network nodes visualization */}
+                          <div className="relative w-full h-full">
+                            {/* Center node */}
+                            <motion.div
+                              initial={{ scale: 0, opacity: 0 }}
+                              animate={{ scale: 1, opacity: 1 }}
+                              transition={{ delay: 0.1 }}
+                              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
+                            >
+                              <div className="w-8 h-8 rounded-full bg-[#FF4500] shadow-lg shadow-[#FF4500]/50 flex items-center justify-center">
+                                <div className="w-4 h-4 rounded-full bg-white/30" />
+                              </div>
+                            </motion.div>
+
+                            {/* Orbiting nodes */}
+                            {[0, 60, 120, 180, 240, 300].map((angle, idx) => {
+                              const rad = (angle * Math.PI) / 180;
+                              const x = 50 + 30 * Math.cos(rad);
+                              const y = 50 + 30 * Math.sin(rad);
+                              return (
+                                <motion.div
+                                  key={idx}
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  transition={{ delay: 0.15 + idx * 0.05 }}
+                                  className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-5"
+                                  style={{ transform: `translate(calc(-50% + ${x - 50}%), calc(-50% + ${y - 50}%))` }}
+                                >
+                                  <div className={`w-5 h-5 rounded-full flex items-center justify-center shadow-md ${
+                                    idx % 2 === 0
+                                      ? 'bg-[#FF8A5B]/40'
+                                      : 'bg-[#FFB366]/40'
+                                  }`}>
+                                    <div className={`w-2 h-2 rounded-full ${idx % 2 === 0 ? 'bg-[#FF8A5B]' : 'bg-[#FFB366]'}`} />
+                                  </div>
+                                </motion.div>
+                              );
+                            })}
+
+                            {/* Connection lines */}
+                            <svg className="absolute inset-0 w-full h-full" style={{ pointerEvents: 'none' }}>
+                              {[0, 60, 120, 180, 240, 300].map((angle, idx) => {
+                                const rad = (angle * Math.PI) / 180;
+                                const x = 50 + 30 * Math.cos(rad);
+                                const y = 50 + 30 * Math.sin(rad);
+                                return (
+                                  <line
+                                    key={idx}
+                                    x1="50%"
+                                    y1="50%"
+                                    x2={`${x}%`}
+                                    y2={`${y}%`}
+                                    stroke={idx % 2 === 0 ? 'rgba(255, 138, 91, 0.3)' : 'rgba(255, 179, 102, 0.3)'}
+                                    strokeWidth="1"
+                                  />
+                                );
+                              })}
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Events Captured</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{isLoadingReddit ? 'Loading...' : redditEventsCount}</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Patient Zero</p>
+                          <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{isLoadingReddit ? 'Analyzing Reddit threads...' : redditPatientZero}</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Top Amplifier</p>
+                          <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{isLoadingReddit ? 'Measuring amplification...' : redditSuperSpreader}</p>
+                        </div>
+                      </div>
+
+                      <SpreadTimelinePanel
+                        isDarkMode={isDarkMode}
+                        eyebrow={platformSpreadTimelines.reddit.eyebrow}
+                        heading={platformSpreadTimelines.reddit.heading}
+                        events={platformSpreadTimelines.reddit.events}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {activePlatform === 'x' && (
+                  <div className={`mt-6 rounded-[28px] border p-8 relative overflow-hidden ${
+                    isDarkMode
+                      ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                  }`}>
+                    <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-[#1DA1F2]/10 blur-3xl" />
+                    <div className="relative space-y-5">
+                      <div>
+                        <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>X Monitoring</p>
+                        <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>X Platform Mentions</h3>
+                      </div>
+                      <div className={`rounded-[28px] border p-8 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className={`text-xs uppercase tracking-[0.24em] mb-4 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Total Mentions</p>
+                            <p className={`text-6xl leading-none mb-8 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>47</p>
+                            <p className={`text-xl ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Live engagement metrics</p>
+                          </div>
+                          <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#1DA1F2]/10">
+                            <span className="text-5xl">𝕏</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Retweets</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>142</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Replies</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>89</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Status</p>
+                          <p className={`text-2xl text-[#22C55E]`}>Verified</p>
+                        </div>
+                      </div>
+                      <SpreadTimelinePanel
+                        isDarkMode={isDarkMode}
+                        eyebrow={platformSpreadTimelines.x.eyebrow}
+                        heading={platformSpreadTimelines.x.heading}
+                        events={platformSpreadTimelines.x.events}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {activePlatform === 'facebook' && (
+                  <div className={`mt-6 rounded-[28px] border p-8 relative overflow-hidden ${
+                    isDarkMode
+                      ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                  }`}>
+                    <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-[#1877F2]/10 blur-3xl" />
+                    <div className="relative space-y-5">
+                      <div>
+                        <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Facebook Network</p>
+                        <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Engagement Analysis</h3>
+                      </div>
+                      <div className={`rounded-[28px] border p-8 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className={`text-xs uppercase tracking-[0.24em] mb-4 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Total Shares</p>
+                            <p className={`text-6xl leading-none mb-8 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>89</p>
+                            <p className={`text-xl ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Mixed source amplification</p>
+                          </div>
+                          <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#1877F2]/10">
+                            <Facebook className="w-12 h-12 text-[#1877F2]" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Comments</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>124</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Reactions</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>356</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Status</p>
+                          <p className={`text-2xl text-[#EF4444]`}>Mixed Sources</p>
+                        </div>
+                      </div>
+                      <SpreadTimelinePanel
+                        isDarkMode={isDarkMode}
+                        eyebrow={platformSpreadTimelines.facebook.eyebrow}
+                        heading={platformSpreadTimelines.facebook.heading}
+                        events={platformSpreadTimelines.facebook.events}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {activePlatform === 'instagram' && (
+                  <div className={`mt-6 rounded-[28px] border p-8 relative overflow-hidden ${
+                    isDarkMode
+                      ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                  }`}>
+                    <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-[#E1306C]/10 blur-3xl" />
+                    <div className="relative space-y-5">
+                      <div>
+                        <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Instagram Activity</p>
+                        <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Visual Content Spread</h3>
+                      </div>
+                      <div className={`rounded-[28px] border p-8 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className={`text-xs uppercase tracking-[0.24em] mb-4 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Total Posts</p>
+                            <p className={`text-6xl leading-none mb-8 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>63</p>
+                            <p className={`text-xl ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Under monitoring</p>
+                          </div>
+                          <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#E1306C]/10">
+                            <Instagram className="w-12 h-12 text-[#E1306C]" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Likes</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>2,847</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Comments</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>421</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Status</p>
+                          <p className={`text-2xl text-[#FBBF24]`}>Monitoring</p>
+                        </div>
+                      </div>
+                      <SpreadTimelinePanel
+                        isDarkMode={isDarkMode}
+                        eyebrow={platformSpreadTimelines.instagram.eyebrow}
+                        heading={platformSpreadTimelines.instagram.heading}
+                        events={platformSpreadTimelines.instagram.events}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {activePlatform === 'news' && (
+                  <div className={`mt-6 rounded-[28px] border p-8 relative overflow-hidden ${
+                    isDarkMode
+                      ? 'bg-[linear-gradient(180deg,rgba(8,15,31,0.94),rgba(15,23,42,0.9))] border-white/8 shadow-[0_18px_45px_rgba(2,6,23,0.35)]'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                  }`}>
+                    <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-[#FF6B00]/10 blur-3xl" />
+                    <div className="relative space-y-5">
+                      <div>
+                        <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>News Coverage</p>
+                        <h3 className={`text-xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Publisher Distribution</h3>
+                      </div>
+                      <div className={`rounded-[28px] border p-8 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className={`text-xs uppercase tracking-[0.24em] mb-4 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Total Articles</p>
+                            <p className={`text-6xl leading-none mb-8 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>124</p>
+                            <p className={`text-xl ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Verified coverage detected</p>
+                          </div>
+                          <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[#FF6B00]/10">
+                            <Newspaper className="w-12 h-12 text-[#FF6B00]" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Tier 1 Sources</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>47</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Tier 2 Sources</p>
+                          <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>56</p>
+                        </div>
+                        <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-white/5 border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                          <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Status</p>
+                          <p className={`text-2xl text-[#22C55E]`}>Verified</p>
+                        </div>
+                      </div>
+                      <SpreadTimelinePanel
+                        isDarkMode={isDarkMode}
+                        eyebrow={platformSpreadTimelines.news.eyebrow}
+                        heading={platformSpreadTimelines.news.heading}
+                        events={platformSpreadTimelines.news.events}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className={`mt-6 p-4 rounded-xl ${isDarkMode ? 'bg-[#0F172A]' : 'bg-[#F8FAFC]'}`}>
                   <p className={`text-sm ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>
                     <strong className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>Cross-platform analysis:</strong> This claim has been detected across multiple social media platforms and news sources.
-                    The verification engine monitors news websites, Instagram posts, and social media mentions to provide comprehensive fact-checking coverage.
+                    The verification engine monitors Reddit threads, news websites, Instagram posts, and social media mentions to provide comprehensive fact-checking coverage.
                   </p>
                 </div>
               </div>
@@ -1187,6 +2090,52 @@ export function VerifyClaim() {
                   </div>
                 </div>
               )}
+            </motion.div>
+          )}
+
+          {isAnalyzing && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`rounded-[28px] border p-8 shadow-sm transition-colors ${
+                isDarkMode
+                  ? 'bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.12),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(30,41,59,0.92))] border-white/8 shadow-[0_28px_80px_rgba(2,6,23,0.5)]'
+                  : 'bg-white border-[#E2E8F0]'
+              }`}
+            >
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className={`text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Reloading Verification</p>
+                  <h2 className={`text-2xl mb-3 ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>Analyzing the updated claim</h2>
+                  <p className={isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}>
+                    We are refreshing the verification dashboard, rechecking sources, and rebuilding the cross-platform spread view.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 rounded-2xl border border-[#22D3EE]/20 bg-[#22D3EE]/10 px-5 py-4">
+                  <div className="h-10 w-10 rounded-full border-2 border-[#22D3EE]/30 border-t-[#22D3EE] animate-spin" />
+                  <div>
+                    <p className="text-sm text-[#22D3EE]">Refresh in progress</p>
+                    <p className={`text-xs ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Fetching evidence and recomputing credibility</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[1, 2, 3].map((index) => (
+                  <div
+                    key={index}
+                    className={`rounded-2xl border p-5 animate-pulse ${
+                      isDarkMode ? 'bg-white/5 border-white/8' : 'bg-[#F8FAFC] border-[#E2E8F0]'
+                    }`}
+                  >
+                    <div className={`h-3 w-28 rounded-full mb-4 ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                    <div className={`h-8 w-20 rounded-full mb-4 ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                    <div className={`h-3 w-full rounded-full mb-2 ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                    <div className={`h-3 w-4/5 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-slate-200'}`} />
+                  </div>
+                ))}
+              </div>
             </motion.div>
           )}
 

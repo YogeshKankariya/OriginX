@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Flame, Globe, ArrowUpRight, Clock3 } from 'lucide-react';
+import { Flame, Globe, ArrowUpRight, Clock3, RefreshCw, Timer } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { useDarkMode } from '../components/DarkModeContext';
 import { getTrendingNews, type TrendingNewsResponse } from '../services/api';
@@ -13,6 +13,7 @@ interface TrendingNewsItem {
   category: string;
   published: string;
   momentum: string;
+  url: string;
 }
 
 const COUNTRY_OPTIONS: Array<{ value: string; label: string }> = [
@@ -143,6 +144,8 @@ export function TrendingNews() {
   const [selectedCountry, setSelectedCountry] = useState('global');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [detectedLocalCountry, setDetectedLocalCountry] = useState('us');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8;
   const detectedLocalCountryName = formatCountryName(detectedLocalCountry);
 
   useEffect(() => {
@@ -250,14 +253,29 @@ export function TrendingNews() {
     category: article.category,
     published: formatPublishedAgo(article.published_at),
     momentum: `+${Math.max(8, 28 - index * 2)}%`,
+    url: article.url,
   }));
+
+  const totalPages = Math.max(1, Math.ceil(trendingNews.length / itemsPerPage));
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedTrendingNews = trendingNews.slice(startIndex, startIndex + itemsPerPage);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCountry, selectedCategory]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const metrics = [
     {
-      label: 'Stories Tracked',
+      label: 'News Tracked',
       value: String(newsData?.articles_found || trendingNews.length || 0),
       icon: Flame,
-      color: '#F97316'
+      color: '#22C55E'
     },
     {
       label: 'Regions Active',
@@ -268,58 +286,65 @@ export function TrendingNews() {
     {
       label: 'Avg Update Time',
       value: '30m',
-      icon: Clock3,
-      color: '#3B82F6'
+      icon: Timer,
+      color: '#EF4444'
     }
   ];
 
+  const categoryColors: Record<string, string> = {
+    business: '#3B82F6',
+    entertainment: '#A855F7',
+    general: '#64748B',
+    health: '#22C55E',
+    science: '#06B6D4',
+    sports: '#22C55E',
+    technology: '#8B5CF6',
+  };
+
   return (
-    <div className={`min-h-screen transition-all duration-300 ${isDarkMode ? 'bg-[#0B1120]' : 'bg-[#F8FAFC]'}`}>
+    <div className={`min-h-screen transition-all duration-300 ${isDarkMode ? 'bg-[#0B1120]' : 'bg-[#F1F5F9]'}`}>
       <Sidebar />
 
       <div className="ml-64 p-8">
         <div className="max-w-7xl mx-auto">
-          <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h1 className={`text-3xl font-bold mb-2 transition-colors ${isDarkMode ? 'text-[#F9FAFB]' : 'text-[#0F172A]'}`}>
-                Trending News
-              </h1>
-              <p className={`transition-colors ${isDarkMode ? 'text-[#9CA3AF]' : 'text-[#64748B]'}`}>
-                Fast-moving stories tracked across trusted global sources.
-              </p>
-              <p className={`text-sm mt-1 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
-                Global mode prioritizes headlines from your detected local country: {detectedLocalCountryName}.
-              </p>
-              <p className={`text-sm mt-1 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
-                Feed includes trusted publishers only for the selected region and category.
-              </p>
+
+          {/* ── Header ── */}
+          <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#22C55E] to-[#16A34A] shadow-lg shadow-[#22C55E]/30 flex-shrink-0">
+                <Flame className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <h1 className={`text-3xl font-bold leading-tight ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>
+                  Trending News
+                </h1>
+                <p className={`text-sm mt-0.5 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                  Local priority: <span className={isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}>{detectedLocalCountryName}</span> · Trusted publishers only
+                </p>
+              </div>
             </div>
 
-            <div className={`inline-flex items-center gap-3 rounded-2xl border px-4 py-3 ${
+            <div className={`inline-flex items-center gap-3 rounded-2xl border px-5 py-3.5 ${
               isDarkMode
-                ? 'bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(30,41,59,0.85))] border-[#3B82F6]/20 shadow-[0_0_24px_rgba(34,211,238,0.12)]'
-                : 'bg-white border-[#BFDBFE] shadow-sm'
+                ? 'bg-[#111827] border-white/8 shadow-lg'
+                : 'bg-white border-[#E2E8F0] shadow-sm'
             }`}>
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B82F6] to-[#22D3EE] shadow-lg shadow-[#22D3EE]/20">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B82F6] to-[#22D3EE] shadow-md shadow-[#22D3EE]/25">
                 <Clock3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className={`text-xs uppercase tracking-[0.18em] ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
-                  Real Time Feed
-                </p>
-                <p className={`text-2xl ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{currentTime}</p>
-                {lastRefresh && <p className="text-xs text-[#22D3EE] mt-1">Last refresh: {lastRefresh.toLocaleTimeString()}</p>}
+                <p className={`text-xs uppercase tracking-widest ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>Live Feed</p>
+                <p className={`text-xl font-semibold tabular-nums ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{currentTime}</p>
+                {lastRefresh && <p className="text-xs text-[#22D3EE]">Refreshed {lastRefresh.toLocaleTimeString()}</p>}
               </div>
             </div>
           </div>
 
-          <div className={`mb-6 rounded-2xl border p-5 ${isDarkMode ? 'bg-[#1F2937] border-[#374151]' : 'bg-white border-[#E2E8F0]'}`}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="trending-country"
-                  className={`block text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}
-                >
+          {/* ── Filters ── */}
+          <div className={`mb-6 rounded-2xl border p-5 ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+            <div className="flex flex-col md:flex-row gap-4 items-end">
+              <div className="flex-1">
+                <label htmlFor="trending-country" className={`block text-xs uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
                   Country Scope
                 </label>
                 <select
@@ -327,152 +352,261 @@ export function TrendingNews() {
                   title="Select country scope"
                   value={selectedCountry}
                   onChange={(event) => setSelectedCountry(event.target.value)}
-                  className={`w-full rounded-xl border px-4 py-3 outline-none transition-all ${
+                  className={`w-full rounded-xl border px-4 py-2.5 outline-none transition-all text-sm ${
                     isDarkMode
-                      ? 'bg-[#0F172A] border-[#334155] text-white focus:border-[#22D3EE]'
-                      : 'bg-white border-[#CBD5E1] text-[#0F172A] focus:border-[#22D3EE]'
+                      ? 'bg-[#0B1120] border-white/10 text-white focus:border-[#3B82F6]'
+                      : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#0F172A] focus:border-[#3B82F6]'
                   }`}
                 >
                   {COUNTRY_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </div>
-
-              <div>
-                <label
-                  htmlFor="trending-category"
-                  className={`block text-xs uppercase tracking-[0.18em] mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}
-                >
-                  Category Filter
+              <div className="flex-1">
+                <label htmlFor="trending-category" className={`block text-xs uppercase tracking-widest mb-2 ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                  Category
                 </label>
                 <select
                   id="trending-category"
                   title="Select news category"
                   value={selectedCategory}
                   onChange={(event) => setSelectedCategory(event.target.value)}
-                  className={`w-full rounded-xl border px-4 py-3 outline-none transition-all ${
+                  className={`w-full rounded-xl border px-4 py-2.5 outline-none transition-all text-sm ${
                     isDarkMode
-                      ? 'bg-[#0F172A] border-[#334155] text-white focus:border-[#22D3EE]'
-                      : 'bg-white border-[#CBD5E1] text-[#0F172A] focus:border-[#22D3EE]'
+                      ? 'bg-[#0B1120] border-white/10 text-white focus:border-[#3B82F6]'
+                      : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#0F172A] focus:border-[#3B82F6]'
                   }`}
                 >
                   {CATEGORY_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </div>
+              <button
+                onClick={() => { void fetchLatestNews(); }}
+                disabled={isLoadingNews}
+                className={`inline-flex items-center gap-2 rounded-xl border px-5 py-2.5 text-sm font-medium transition-all flex-shrink-0 ${
+                  isLoadingNews
+                    ? isDarkMode
+                      ? 'border-white/8 bg-white/5 text-[#64748B] cursor-not-allowed'
+                      : 'border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8] cursor-not-allowed'
+                    : isDarkMode
+                      ? 'border-[#3B82F6]/30 bg-[#3B82F6]/10 text-[#93C5FD] hover:bg-[#3B82F6]/20 hover:border-[#3B82F6]/50'
+                      : 'border-[#BFDBFE] bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE]'
+                }`}
+                title="Refresh trending feed"
+                aria-label="Refresh trending feed"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoadingNews ? 'animate-spin' : ''}`} />
+                {isLoadingNews ? 'Refreshing…' : 'Refresh'}
+              </button>
             </div>
           </div>
 
           {newsError && (
-            <div className="mb-6 rounded-2xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-4 py-3 text-sm text-[#FCA5A5]">
+            <div className="mb-6 rounded-2xl border border-[#EF4444]/30 bg-[#EF4444]/10 px-5 py-3.5 text-sm text-[#FCA5A5]">
               {newsError}
             </div>
           )}
 
           {!!newsData && (
-            <div className={`mb-6 rounded-2xl border p-4 text-sm ${isDarkMode ? 'bg-[#1F2937] border-[#374151] text-[#9CA3AF]' : 'bg-white border-[#E2E8F0] text-[#64748B]'}`}>
-              Trusted-source filtering active: {newsData.articles_found} stories loaded, {newsData.skipped_untrusted_count} non-trusted stories skipped.
+            <div className={`mb-6 flex items-center gap-2 rounded-2xl border px-5 py-3 text-sm ${isDarkMode ? 'bg-[#111827] border-white/8 text-[#64748B]' : 'bg-white border-[#E2E8F0] text-[#94A3B8]'}`}>
+              <div className="w-2 h-2 rounded-full bg-[#22C55E] animate-pulse" />
+              <span><span className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>{newsData.articles_found}</span> stories loaded · <span className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>{newsData.skipped_untrusted_count}</span> non-trusted skipped</span>
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            {metrics.map((metric, index) => {
-              const Icon = metric.icon;
-
-              return (
-                <motion.div
-                  key={metric.label}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.08 }}
-                  className={`rounded-2xl border p-6 transition-all duration-300 hover:shadow-2xl hover:-translate-y-0.5 relative overflow-hidden group cursor-pointer ${
-                    isDarkMode
-                      ? 'bg-[#1F2937] border-[#374151] shadow-lg shadow-[#3B82F6]/5 hover:shadow-[#3B82F6]/20'
-                      : 'bg-white border-[#E2E8F0] shadow-sm hover:shadow-md'
-                  }`}
-                >
-                  {isDarkMode && (
-                    <div className="absolute inset-0 bg-gradient-to-br from-[#3B82F6]/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                  )}
-
-                  <div className="relative z-10">
-                    <div className="flex items-start justify-between mb-4">
-                      <p className={isDarkMode ? 'text-[#9CA3AF]' : 'text-[#64748B]'}>{metric.label}</p>
-                      <div
-                        className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${isDarkMode ? 'shadow-lg' : ''}`}
-                        style={{
-                          backgroundColor: `${metric.color}15`,
-                          boxShadow: isDarkMode ? `0 0 20px ${metric.color}40` : 'none'
-                        }}
-                      >
-                        <Icon className="w-6 h-6" style={{ color: metric.color }} />
-                      </div>
-                    </div>
-
-                    <p className={`text-3xl font-bold ${isDarkMode ? 'text-[#F9FAFB]' : 'text-[#0F172A]'}`}>{metric.value}</p>
+          {/* ── Metric Cards ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+            {isLoadingNews && !newsData
+              ? Array.from({ length: 3 }, (_, skIndex) => (
+                  <div key={skIndex} className={`rounded-2xl border p-6 animate-pulse ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                    <div className={`h-1 w-full rounded-full mb-5 ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
+                    <div className={`h-3 w-24 rounded mb-4 ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
+                    <div className={`h-9 w-16 rounded ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
                   </div>
-                </motion.div>
-              );
-            })}
+                ))
+              : metrics.map((metric, index) => {
+                  const Icon = metric.icon;
+                  const isAvgUpdateMetric = metric.label === 'Avg Update Time';
+                  return (
+                    <motion.div
+                      key={metric.label}
+                      initial={{ opacity: 0, y: 16 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.08 }}
+                      className={`relative overflow-hidden rounded-2xl border p-6 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg ${
+                        isDarkMode ? 'bg-[#111827] border-white/8 hover:border-white/80' : 'bg-white border-[#E2E8F0] hover:border-white'
+                      }`}
+                    >
+                      <div className="absolute top-0 left-0 right-0 h-1 rounded-t-2xl" style={{ backgroundColor: metric.color }} />
+                      <div className="flex items-center justify-between mb-4 mt-1">
+                        <p className={`text-sm ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>{metric.label}</p>
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center"
+                          style={isAvgUpdateMetric
+                            ? { background: 'linear-gradient(135deg, #EF4444, #DC2626)' }
+                            : { backgroundColor: `${metric.color}18` }}
+                        >
+                          <Icon className="w-5 h-5" style={{ color: isAvgUpdateMetric ? '#FFFFFF' : metric.color }} />
+                        </div>
+                      </div>
+                      <p className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-[#0F172A]'}`}>{metric.value}</p>
+                    </motion.div>
+                  );
+                })
+            }
           </div>
 
-          <div className="space-y-4">
+          {/* ── News Feed ── */}
+          <div className="space-y-3">
             {isLoadingNews && !trendingNews.length && (
-              <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-[#1F2937] border-[#374151] text-[#9CA3AF]' : 'bg-white border-[#E2E8F0] text-[#64748B]'}`}>
-                Loading latest headlines...
-              </div>
+              Array.from({ length: 8 }, (_, skIndex) => (
+                <div key={skIndex} className={`rounded-2xl border p-5 animate-pulse ${isDarkMode ? 'bg-[#111827] border-white/8' : 'bg-white border-[#E2E8F0]'}`}>
+                  <div className="flex gap-4 mb-3">
+                    <div className={`w-8 h-8 rounded-lg flex-shrink-0 ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
+                    <div className="flex-1 space-y-2">
+                      <div className={`h-4 w-full rounded ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
+                      <div className={`h-4 w-2/3 rounded ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {[60, 40, 72, 56].map((w, i) => (
+                      <div key={i} className={`h-6 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-[#E2E8F0]'}`} style={{ width: w }} />
+                    ))}
+                  </div>
+                </div>
+              ))
             )}
 
             {!isLoadingNews && !trendingNews.length && !newsError && (
-              <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-[#1F2937] border-[#374151] text-[#9CA3AF]' : 'bg-white border-[#E2E8F0] text-[#64748B]'}`}>
-                No trending stories were returned for the selected region.
+              <div className={`rounded-2xl border p-8 text-center ${isDarkMode ? 'bg-[#111827] border-white/8 text-[#64748B]' : 'bg-white border-[#E2E8F0] text-[#94A3B8]'}`}>
+                No trending stories for the selected region.
               </div>
             )}
 
-            {trendingNews.map((item, index) => (
-              <motion.div
-                key={item.id}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.08 }}
-                className={`rounded-2xl border p-5 transition-all duration-300 cursor-pointer hover:-translate-y-0.5 ${
-                  isDarkMode
-                    ? 'bg-[#1F2937] border-[#374151] hover:border-[#3B82F6]/40 hover:shadow-lg hover:shadow-[#3B82F6]/10'
-                    : 'bg-white border-[#E2E8F0] hover:border-[#3B82F6]/40 hover:shadow-md'
-                }`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4 mb-3">
-                  <h2 className={`text-lg font-semibold flex-1 ${isDarkMode ? 'text-[#F9FAFB]' : 'text-[#0F172A]'}`}>
-                    {item.headline}
-                  </h2>
-                  <div className="flex items-center gap-2 text-[#22C55E] font-semibold">
-                    <span>{item.momentum}</span>
-                    <ArrowUpRight className="w-4 h-4" />
-                  </div>
-                </div>
+            {paginatedTrendingNews.map((item, index) => {
+              const catColor = categoryColors[item.category?.toLowerCase()] ?? '#64748B';
+              const rank = startIndex + index + 1;
+              return (
+                <motion.a
+                  key={item.id}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={`group rounded-2xl border transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg cursor-pointer overflow-hidden block ${
+                    isDarkMode
+                      ? 'bg-[#111827] border-white/8 hover:border-white/16 hover:shadow-black/30'
+                      : 'bg-white border-[#E2E8F0] hover:border-[#CBD5E1] hover:shadow-[#0F172A]/8'
+                  }`}
+                >
+                  <div className="flex items-stretch">
+                    {/* Left accent bar */}
+                    <div className="w-1 flex-shrink-0 rounded-l-2xl" style={{ backgroundColor: catColor }} />
 
-                <div className="flex flex-wrap gap-2">
-                  <span className={`text-sm px-3 py-1 rounded-full ${isDarkMode ? 'bg-[#0F172A] text-[#94A3B8]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
-                    {item.source}
-                  </span>
-                  <span className={`text-sm px-3 py-1 rounded-full ${isDarkMode ? 'bg-[#0F172A] text-[#94A3B8]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
-                    {item.region}
-                  </span>
-                  <span className={`text-sm px-3 py-1 rounded-full ${isDarkMode ? 'bg-[#0F172A] text-[#94A3B8]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
-                    {item.category}
-                  </span>
-                  <span className={`text-sm px-3 py-1 rounded-full ${isDarkMode ? 'bg-[#0F172A] text-[#94A3B8]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
-                    {item.published}
-                  </span>
+                    <div className="flex-1 p-5">
+                      <div className="flex items-start gap-4">
+                        {/* Rank badge */}
+                        <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold mt-0.5 bg-[#3B82F6]/15 text-[#3B82F6] border border-[#3B82F6]/25">
+                          {rank}
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <h2 className={`text-base font-semibold leading-snug mb-3 group-hover:text-[#3B82F6] transition-colors ${isDarkMode ? 'text-[#F1F5F9]' : 'text-[#0F172A]'}`}>
+                            {item.headline}
+                          </h2>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {/* Category chip */}
+                            <span className="text-xs font-medium px-2.5 py-1 rounded-full" style={{ backgroundColor: `${catColor}18`, color: catColor }}>
+                              {item.category}
+                            </span>
+                            {/* Source */}
+                            <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${isDarkMode ? 'bg-white/8 text-[#94A3B8]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
+                              {item.source}
+                            </span>
+                            {/* Region */}
+                            <span className={`text-xs px-2.5 py-1 rounded-full ${isDarkMode ? 'bg-white/5 text-[#64748B]' : 'bg-[#F8FAFC] text-[#94A3B8]'}`}>
+                              <Globe className="inline w-3 h-3 mr-1 -mt-0.5" />{item.region}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Right meta */}
+                        <div className="flex-shrink-0 flex flex-col items-end gap-2 ml-2">
+                          <div className="flex items-center gap-1 text-[#22C55E] font-semibold text-sm">
+                            <ArrowUpRight className="w-4 h-4" />
+                            {item.momentum}
+                          </div>
+                          <div className={`flex items-center gap-1 text-xs ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                            <Clock3 className="w-3 h-3" />
+                            {item.published}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.a>
+              );
+            })}
+
+            {/* ── Pagination ── */}
+            {trendingNews.length > 0 && (
+              <div className="mt-6 flex items-center justify-between">
+                <p className={`text-sm ${isDarkMode ? 'text-[#64748B]' : 'text-[#94A3B8]'}`}>
+                  {startIndex + 1}–{Math.min(startIndex + itemsPerPage, trendingNews.length)} of {trendingNews.length} stories
+                </p>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                      currentPage === 1
+                        ? isDarkMode ? 'bg-white/5 text-[#4B5563] cursor-not-allowed' : 'bg-[#F1F5F9] text-[#CBD5E1] cursor-not-allowed'
+                        : isDarkMode ? 'bg-white/8 text-[#94A3B8] hover:bg-white/12 hover:text-white' : 'bg-white border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
+                    }`}
+                  >
+                    ← Prev
+                  </button>
+
+                  {Array.from({ length: totalPages }, (_, i) => {
+                    const p = i + 1;
+                    const isActive = p === currentPage;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => setCurrentPage(p)}
+                        className={`w-9 h-9 rounded-xl text-sm font-medium transition-all ${
+                          isActive
+                            ? 'bg-[#3B82F6] text-white shadow-md shadow-[#3B82F6]/30'
+                            : isDarkMode ? 'bg-white/8 text-[#94A3B8] hover:bg-white/12 hover:text-white' : 'bg-white border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+
+                  <button
+                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                      currentPage === totalPages
+                        ? isDarkMode ? 'bg-white/5 text-[#4B5563] cursor-not-allowed' : 'bg-[#F1F5F9] text-[#CBD5E1] cursor-not-allowed'
+                        : isDarkMode ? 'bg-white/8 text-[#94A3B8] hover:bg-white/12 hover:text-white' : 'bg-white border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
+                    }`}
+                  >
+                    Next →
+                  </button>
                 </div>
-              </motion.div>
-            ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
