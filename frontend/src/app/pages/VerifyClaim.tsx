@@ -27,7 +27,13 @@ import { Sidebar } from '../components/Sidebar';
 import { CredibilityGauge } from '../components/CredibilityGauge';
 import { NetworkBackground } from '../components/NetworkBackground';
 import { useDarkMode } from '../components/DarkModeContext';
-import { analyzeRedditPropagation, verifyClaim, type RedditPropagationResponse, type VerifyClaimResponse } from '../services/api';
+import {
+  analyzeRedditPropagation,
+  extractTextFromImage,
+  verifyClaim,
+  type RedditPropagationResponse,
+  type VerifyClaimResponse
+} from '../services/api';
 
 interface Article {
   id: number;
@@ -229,6 +235,7 @@ export function VerifyClaim() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [ocrText, setOcrText] = useState('');
   const [verificationData, setVerificationData] = useState<VerifyClaimResponse | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analyzedAt, setAnalyzedAt] = useState<Date | null>(null);
@@ -741,7 +748,7 @@ export function VerifyClaim() {
       const response = await verifyClaim(normalizedClaim);
       setVerificationData(response);
       setAnalyzedAt(new Date());
-      setLastAnalyzedClaim(claim.trim());
+      setLastAnalyzedClaim(normalizedClaim);
       setShowResults(true);
     } catch (error) {
       setAnalysisError(error instanceof Error ? error.message : 'Failed to connect to backend.');
@@ -751,21 +758,54 @@ export function VerifyClaim() {
     }
   };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAnalyze = async () => {
+    await runClaimVerification(claim);
+  };
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (loadEvent) => {
-      const imageData = loadEvent.target?.result;
+    try {
+      const imageData = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (loadEvent) => {
+          const result = loadEvent.target?.result;
+          if (typeof result === 'string') {
+            resolve(result);
+            return;
+          }
 
-      if (typeof imageData === 'string') {
-        setUploadedImage(imageData);
+          reject(new Error('Failed to read the uploaded image.'));
+        };
+        reader.onerror = () => reject(new Error('Failed to read the uploaded image.'));
+        reader.readAsDataURL(file);
+      });
+
+      setUploadedImage(imageData);
+      setAnalysisError(null);
+      setOcrText('');
+
+      const response = await extractTextFromImage({
+        imageData,
+        contentType: file.type || 'image/png',
+      });
+      const extractedClaim = response.text.trim();
+
+      if (!extractedClaim) {
+        throw new Error('No claim text could be extracted from the image.');
       }
-    };
 
-    reader.readAsDataURL(file);
+      setOcrText(extractedClaim);
+      setClaim(extractedClaim);
+      await runClaimVerification(extractedClaim);
+    } catch (error) {
+      setAnalysisError(error instanceof Error ? error.message : 'Failed to extract text from the image.');
+      setShowResults(false);
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const handleClaimKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
