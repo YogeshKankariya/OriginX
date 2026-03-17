@@ -6,6 +6,8 @@ import socket
 import ssl
 from typing import Any
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from urllib.parse import urlparse
 
 import requests
@@ -14,6 +16,8 @@ from app.config import settings
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s\]\[\)\(\"'<>]+", re.IGNORECASE)
+_METADATA_PARALLEL_BUDGET_SECONDS = 8.5
+_METADATA_MAX_WORKERS = 5
 
 
 def extract_urls_from_text(text: str) -> list[str]:
@@ -34,6 +38,63 @@ def _safe_get_json(url: str, *, params: dict[str, Any] | None = None, timeout: i
         return None
 
     return payload if isinstance(payload, dict) else None
+
+
+@lru_cache(maxsize=1)
+def _get_rdap_bootstrap() -> list[tuple[list[str], list[str]]]:
+    payload = _safe_get_json("https://data.iana.org/rdap/dns.json", timeout=15)
+    if not payload:
+        return []
+
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return []
+
+    results: list[tuple[list[str], list[str]]] = []
+    for service in services:
+        if not isinstance(service, list) or len(service) < 2:
+            continue
+
+        suffixes, providers = service[0], service[1]
+        if not isinstance(suffixes, list) or not isinstance(providers, list):
+            continue
+
+        normalized_suffixes = [str(suffix).lower().strip(".") for suffix in suffixes if isinstance(suffix, str) and suffix.strip()]
+        normalized_providers = [str(provider).strip() for provider in providers if isinstance(provider, str) and provider.strip()]
+        if normalized_suffixes and normalized_providers:
+            results.append((normalized_suffixes, normalized_providers))
+
+    return results
+
+
+def _get_rdap_provider_urls(hostname: str) -> list[str]:
+    labels = [part.lower() for part in hostname.split(".") if part]
+    if not labels:
+        return []
+
+    candidates = [".".join(labels[index:]) for index in range(len(labels))]
+    bootstrap = _get_rdap_bootstrap()
+
+    for candidate in candidates:
+        for suffixes, providers in bootstrap:
+            if candidate in suffixes:
+                return providers
+
+    return []
+
+
+def _fetch_rdap_payload(hostname: str) -> dict[str, Any] | None:
+    provider_urls = _get_rdap_provider_urls(hostname)
+    fallback_urls = [f"https://rdap.org/domain/{hostname}"]
+
+    for provider in [*provider_urls, *fallback_urls]:
+        base_url = provider.rstrip("/")
+        endpoint = base_url if "/domain/" in base_url.lower() else f"{base_url}/domain/{hostname}"
+        payload = _safe_get_json(endpoint, timeout=12)
+        if payload:
+            return payload
+
+    return None
 
 
 def _parse_rdap_date(value: str | None) -> datetime | None:
@@ -177,7 +238,7 @@ def _get_ssl_expiry(hostname: str) -> str | None:
 
 
 def _get_rdap_details(hostname: str) -> dict[str, Any]:
-    payload = _safe_get_json(f"https://rdap.org/domain/{hostname}", timeout=10)
+    payload = _fetch_rdap_payload(hostname)
     if not payload:
         return {}
 
@@ -227,13 +288,46 @@ def _get_ip_geolocation(ip_address: str) -> dict[str, Any]:
 
 
 def _collect_url_metadata(url: str, domain: str) -> dict[str, Any]:
-    dns_a_records = _get_dns_a_records(domain)
-    primary_ip = dns_a_records[0] if dns_a_records else None
+    dns_a_records: list[str] = []
+    dns_mx_records: list[str] = []
+    page_title: str | None = None
+    redirect_hops = 0
+    rdap_details: dict[str, Any] = {}
+    ssl_expiry: str | None = None
 
-    page_title, redirect_hops = _fetch_url_content_metadata(url)
-    rdap_details = _get_rdap_details(domain)
+    with ThreadPoolExecutor(max_workers=_METADATA_MAX_WORKERS) as executor:
+        future_map = {
+            executor.submit(_get_dns_a_records, domain): "dns_a",
+            executor.submit(_get_dns_mx_records, domain): "dns_mx",
+            executor.submit(_fetch_url_content_metadata, url): "content",
+            executor.submit(_get_rdap_details, domain): "rdap",
+            executor.submit(_get_ssl_expiry, domain): "ssl",
+        }
+
+        try:
+            for future in as_completed(future_map, timeout=_METADATA_PARALLEL_BUDGET_SECONDS):
+                task_name = future_map[future]
+                try:
+                    result = future.result()
+                except Exception:
+                    continue
+
+                if task_name == "dns_a" and isinstance(result, list):
+                    dns_a_records = [ip for ip in result if isinstance(ip, str)]
+                elif task_name == "dns_mx" and isinstance(result, list):
+                    dns_mx_records = [mx for mx in result if isinstance(mx, str)]
+                elif task_name == "content" and isinstance(result, tuple) and len(result) == 2:
+                    page_title = result[0] if isinstance(result[0], str) or result[0] is None else None
+                    redirect_hops = result[1] if isinstance(result[1], int) else 0
+                elif task_name == "rdap" and isinstance(result, dict):
+                    rdap_details = result
+                elif task_name == "ssl" and (isinstance(result, str) or result is None):
+                    ssl_expiry = result
+        except TimeoutError:
+            pass
+
+    primary_ip = dns_a_records[0] if dns_a_records else None
     geo_details = _get_ip_geolocation(primary_ip) if primary_ip else {}
-    ssl_expiry = _get_ssl_expiry(domain)
 
     return {
         "ip_address": primary_ip,
@@ -241,7 +335,7 @@ def _collect_url_metadata(url: str, domain: str) -> dict[str, Any]:
         "redirect_hops": redirect_hops,
         "registrar": rdap_details.get("registrar"),
         "dns_a": dns_a_records,
-        "dns_mx": _get_dns_mx_records(domain),
+        "dns_mx": dns_mx_records,
         "ssl_expiry": ssl_expiry,
         "ssl_valid": bool(ssl_expiry),
         "location": geo_details.get("location"),
