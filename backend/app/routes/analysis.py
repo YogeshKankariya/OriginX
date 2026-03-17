@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.domain_security import analyze_claim_urls, analyze_domain_risk
+from app.services.image_ocr import extract_text_from_image_bytes
 from app.services.news_verification import fetch_trending_daily_news
 from app.services.propagation_analysis import analyze_propagation
 from app.services.reddit_propagation import analyze_reddit_propagation
@@ -42,6 +43,24 @@ class RedditPropagationRequest(BaseModel):
     comments_per_post: int = 20
     sort: str = "new"
     time_filter: str = "week"
+
+
+class ImageOcrRequest(BaseModel):
+    image_data: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+
+
+@router.post("/ocr-image")
+def ocr_image(payload: ImageOcrRequest) -> dict[str, str]:
+    try:
+        extracted_text = extract_text_from_image_bytes(payload.image_data, payload.content_type)
+        return {"text": extracted_text}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_internal_server_error()
 
 
 @router.post("/propagation")

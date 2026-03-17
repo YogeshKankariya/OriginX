@@ -25,7 +25,7 @@ import { Sidebar } from '../components/Sidebar';
 import { CredibilityGauge } from '../components/CredibilityGauge';
 import { NetworkBackground } from '../components/NetworkBackground';
 import { useDarkMode } from '../components/DarkModeContext';
-import { verifyClaim, type VerifyClaimResponse } from '../services/api';
+import { extractTextFromImage, verifyClaim, type VerifyClaimResponse } from '../services/api';
 
 interface Article {
   id: number;
@@ -146,6 +146,8 @@ export function VerifyClaim() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [ocrText, setOcrText] = useState('');
+  const [isExtractingText, setIsExtractingText] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState('English');
   const [verificationData, setVerificationData] = useState<VerifyClaimResponse | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -391,14 +393,15 @@ export function VerifyClaim() {
     return 'D';
   };
 
-  const handleAnalyze = async () => {
-    if (!claim.trim()) return;
+  const runClaimVerification = async (claimText: string) => {
+    const normalizedClaim = claimText.trim();
+    if (!normalizedClaim) return;
 
     setIsAnalyzing(true);
     setAnalysisError(null);
 
     try {
-      const response = await verifyClaim(claim.trim());
+      const response = await verifyClaim(normalizedClaim);
       setVerificationData(response);
       setAnalyzedAt(new Date());
       setShowResults(true);
@@ -408,6 +411,10 @@ export function VerifyClaim() {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleAnalyze = async () => {
+    await runClaimVerification(claim);
   };
 
   useEffect(() => {
@@ -421,15 +428,43 @@ export function VerifyClaim() {
     resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [showResults]);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setUploadedImage(e.target?.result as string);
-        setClaim('Government banned petrol cars in 2026');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    setIsExtractingText(true);
+    setAnalysisError(null);
+    setShowResults(false);
+
+    try {
+      const imageDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (loadEvent) => resolve(String(loadEvent.target?.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read image file.'));
+        reader.readAsDataURL(file);
+      });
+      const [metadata, base64Data = ''] = imageDataUrl.split(',', 2);
+      const contentTypeMatch = metadata.match(/^data:(.*?);base64$/);
+      const contentType = contentTypeMatch?.[1] || file.type;
+
+      setUploadedImage(imageDataUrl);
+
+      const response = await extractTextFromImage({
+        imageData: base64Data,
+        contentType,
+      });
+      const extractedClaim = response.text.trim();
+
+      setOcrText(extractedClaim);
+      setClaim(extractedClaim);
+      await runClaimVerification(extractedClaim);
+    } catch (error) {
+      setOcrText('');
+      setVerificationData(null);
+      setAnalysisError(error instanceof Error ? error.message : 'Failed to extract text from image.');
+    } finally {
+      setIsExtractingText(false);
+      e.target.value = '';
     }
   };
 
@@ -467,7 +502,7 @@ export function VerifyClaim() {
             <div className="flex items-center gap-4">
               <button
                 onClick={handleAnalyze}
-                disabled={isAnalyzing || !claim.trim()}
+                disabled={isAnalyzing || isExtractingText || !claim.trim()}
                 className="px-6 py-3 bg-gradient-to-r from-[#3B82F6] to-[#22D3EE] text-white rounded-xl hover:shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isAnalyzing ? (
@@ -490,7 +525,7 @@ export function VerifyClaim() {
                 isDarkMode ? 'border-[#475569] text-[#94A3B8]' : 'border-[#CBD5E1] text-[#64748B]'
               }`}>
                 <Upload className="w-5 h-5" />
-                <span>Upload Image</span>
+                <span>{isExtractingText ? 'Extracting Text...' : 'Upload Image'}</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -1134,7 +1169,7 @@ export function VerifyClaim() {
                     <div>
                       <p className={`text-sm mb-3 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#64748B]'}`}>Extracted Text:</p>
                       <div className={`rounded-xl p-4 mb-4 ${isDarkMode ? 'bg-[#0F172A]' : 'bg-[#F8FAFC]'}`}>
-                        <p className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>{claim}</p>
+                        <p className={isDarkMode ? 'text-white' : 'text-[#0F172A]'}>{ocrText || claim}</p>
                       </div>
                       
                       <div className="bg-gradient-to-br from-[#22C55E]/10 to-[#22C55E]/5 border border-[#22C55E]/20 rounded-xl p-4">

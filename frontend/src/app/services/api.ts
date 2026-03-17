@@ -136,11 +136,16 @@ const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string> }).e
 const API_BASE_URL = (viteEnv?.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
+  const headers = isFormData
+    ? { ...(options?.headers || {}) }
+    : {
+        "Content-Type": "application/json",
+        ...(options?.headers || {}),
+      };
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers || {}),
-    },
+    headers,
     ...options,
   });
 
@@ -166,6 +171,16 @@ export function verifyClaim(text: string): Promise<VerifyClaimResponse> {
   return requestJson<VerifyClaimResponse>("/verify-claim", {
     method: "POST",
     body: JSON.stringify({ text }),
+  });
+}
+
+export function extractTextFromImage(input: { imageData: string; contentType: string }): Promise<{ text: string }> {
+  return requestJson<{ text: string }>("/analysis/ocr-image", {
+    method: "POST",
+    body: JSON.stringify({
+      image_data: input.imageData,
+      content_type: input.contentType,
+    }),
   });
 }
 
