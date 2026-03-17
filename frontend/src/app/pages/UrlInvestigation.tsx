@@ -21,7 +21,6 @@ import { CredibilityGauge } from '../components/CredibilityGauge';
 import { useDarkMode } from '../components/DarkModeContext';
 import {
   analyzeDomainSecurity,
-  analyzeRedditPropagation,
   type DomainSecurityResult,
 } from '../services/api';
 
@@ -42,6 +41,13 @@ const UI_COLORS = {
   secondary: '#22D3EE',
   alert: '#F87171',
 };
+
+function formatDomainAge(days: number | null | undefined): string {
+  if (typeof days !== 'number' || Number.isNaN(days) || days < 0) return 'Unknown';
+  if (days < 30) return `${days} days`;
+  if (days < 365) return `${Math.floor(days / 30)} months`;
+  return `${Math.floor(days / 365)} years`;
+}
 
 function Counter({ value, suffix = '', duration = 1100 }: { value: number; suffix?: string; duration?: number }) {
   const [display, setDisplay] = useState(0);
@@ -142,6 +148,7 @@ export function UrlInvestigation() {
     }
 
     const hostname = domainResult?.domain || parsed?.hostname || 'Unknown';
+    const metadata = domainResult?.metadata;
     const protocol = parsed?.protocol || '';
     const pathname = parsed?.pathname || '';
     const isHttps = protocol === 'https:';
@@ -166,6 +173,26 @@ export function UrlInvestigation() {
     const severityLabel = severityScore >= 75 ? 'Critical' : severityScore >= 45 ? 'Elevated' : 'Safe';
     const severityAccent = severityScore >= 75 ? UI_COLORS.alert : severityScore >= 45 ? UI_COLORS.primary : UI_COLORS.secondary;
 
+    const domainAgeLabel = formatDomainAge(metadata?.domain_age_days);
+    const domainAgeNote = metadata?.domain_created_at
+      ? `Registered on ${metadata.domain_created_at}${metadata.domain_expires_at ? ` • Expires on ${metadata.domain_expires_at}` : ''}`
+      : 'Domain registration age is unavailable from public WHOIS/RDAP records.';
+    const sslExpiry = metadata?.ssl_expiry;
+    const sslValid = metadata?.ssl_valid === true;
+    const sslLabel = !isHttps ? 'No HTTPS' : sslValid ? 'Valid SSL' : 'SSL Unknown';
+    const sslAccent = !isHttps || domainRisk === 'high' ? UI_COLORS.alert : sslValid ? UI_COLORS.secondary : UI_COLORS.primary;
+    const sslNote = !isHttps
+      ? 'Connection is not encrypted. Treat as unsafe.'
+      : sslValid
+        ? `Certificate is active${sslExpiry ? ` until ${sslExpiry}` : ''}.`
+        : 'HTTPS is present but certificate details could not be verified.';
+    const locationLabel = metadata?.country_code || metadata?.country || 'Unknown';
+    const locationNote = metadata?.location
+      ? `${metadata.location}${metadata?.isp ? ` • ISP: ${metadata.isp}` : ''}`
+      : metadata?.isp
+        ? `ISP: ${metadata.isp}`
+        : 'ISP: Unknown';
+
     return {
       hostname,
       displayUrl: trimmedUrl || 'No URL provided',
@@ -173,17 +200,13 @@ export function UrlInvestigation() {
       severityScore,
       severityLabel,
       severityAccent,
-      domainAgeLabel: 'Unknown',
-      domainAgeNote: 'Domain age could not be verified.',
-      sslLabel: isHttps ? (domainRisk === 'high' ? 'Untrusted SSL' : 'Valid HTTPS') : 'No HTTPS',
-      sslAccent: UI_COLORS.alert,
-      sslNote: isHttps
-        ? domainRisk === 'high'
-          ? 'Encrypted transport exists, but the domain itself remains unsafe.'
-          : 'Encrypted transport detected.'
-        : 'Connection is not encrypted. Treat as unsafe.',
-      locationLabel: 'Unknown',
-      locationNote: 'ISP: Unknown',
+      domainAgeLabel,
+      domainAgeNote,
+      sslLabel,
+      sslAccent,
+      sslNote,
+      locationLabel,
+      locationNote,
       threatCount: derivedThreats.length,
       threats: derivedThreats,
       summary: domainResult?.reason || (derivedThreats.length ? 'This URL shows multiple suspicious signals that warrant deeper inspection.' : 'No strong threat indicators were detected from the current URL structure.'),
@@ -192,6 +215,7 @@ export function UrlInvestigation() {
 
   const technicalDetails = useMemo(() => {
     const trimmedUrl = url.trim();
+    const metadata = domainResult?.metadata;
     let parsed: URL | null = null;
 
     try {
@@ -201,16 +225,16 @@ export function UrlInvestigation() {
     }
 
     return [
-      { label: 'IP Address', value: 'Unknown' },
-      { label: 'Page Title', value: 'Unknown' },
-      { label: 'Redirect Hops', value: '0' },
-      { label: 'Registrar', value: 'Unknown' },
-      { label: 'DNS A', value: parsed?.hostname ? 'N/A' : 'N/A' },
-      { label: 'DNS MX', value: 'N/A' },
-      { label: 'SSL Expiry', value: investigationSummary.isHttps ? 'Unknown' : 'Unknown' },
+      { label: 'IP Address', value: metadata?.ip_address || 'Unknown' },
+      { label: 'Page Title', value: metadata?.page_title || 'Unknown' },
+      { label: 'Redirect Hops', value: typeof metadata?.redirect_hops === 'number' ? String(metadata.redirect_hops) : 'Unknown' },
+      { label: 'Registrar', value: metadata?.registrar || 'Unknown' },
+      { label: 'DNS A', value: metadata?.dns_a?.length ? metadata.dns_a.join(', ') : (parsed?.hostname ? 'Unavailable' : 'Unavailable') },
+      { label: 'DNS MX', value: metadata?.dns_mx?.length ? metadata.dns_mx.join(', ') : 'Unavailable' },
+      { label: 'SSL Expiry', value: metadata?.ssl_expiry || (investigationSummary.isHttps ? 'Unknown' : 'Not HTTPS') },
       { label: 'Triggered Heuristics', value: investigationSummary.threats.length ? investigationSummary.threats.join(', ') : 'None' },
     ];
-  }, [investigationSummary.isHttps, investigationSummary.threats, url]);
+  }, [domainResult, investigationSummary.isHttps, investigationSummary.threats, url]);
 
   const riskTone = domainRisk === 'high' ? UI_COLORS.alert : domainRisk === 'medium' ? UI_COLORS.primary : UI_COLORS.secondary;
   const riskHeadline = domainRisk === 'high'

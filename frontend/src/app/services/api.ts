@@ -24,6 +24,23 @@ export interface DomainSecurityResult {
   domain?: string;
   domain_risk: "high" | "medium" | "low" | "unknown";
   reason: string;
+  metadata?: {
+    ip_address?: string | null;
+    page_title?: string | null;
+    redirect_hops?: number | null;
+    registrar?: string | null;
+    dns_a?: string[];
+    dns_mx?: string[];
+    ssl_expiry?: string | null;
+    ssl_valid?: boolean | null;
+    location?: string | null;
+    country?: string | null;
+    country_code?: string | null;
+    isp?: string | null;
+    domain_created_at?: string | null;
+    domain_expires_at?: string | null;
+    domain_age_days?: number | null;
+  };
 }
 
 export interface DomainSecurityResponse {
