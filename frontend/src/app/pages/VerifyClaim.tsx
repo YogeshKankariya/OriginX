@@ -245,6 +245,38 @@ export function VerifyClaim() {
   const [isLoadingNews, setIsLoadingNews] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
 
+  const formatTimelineDate = (isoDate: string): string => {
+    const parsed = new Date(isoDate);
+    if (Number.isNaN(parsed.getTime())) return isoDate;
+    return parsed.toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const normalizeText = (value: string): string => value.trim().toLowerCase();
+
+  const localizeBackendVerdict = (value?: string | null): string | null => {
+    if (!value) return null;
+    const normalized = normalizeText(value);
+    if (normalized.includes('unsupported') || normalized.includes('likely false')) {
+      return t('verifyVerdictLikelyFalseUnsupported');
+    }
+    if (normalized.includes('likely true') || normalized.includes('supported')) {
+      return t('verifyVerdictLikelyTrueSupported');
+    }
+    if (normalized.includes('uncertain') || normalized.includes('mixed')) {
+      return t('historyStatusUncertain');
+    }
+    return value;
+  };
+
+  const localizeBackendSummary = (value?: string | null): string | null => {
+    if (!value) return null;
+    const normalized = normalizeText(value);
+    if (normalized.includes('no high-credibility') || normalized.includes('high-similarity news was available')) {
+      return t('verifySummaryNoHighCredibility');
+    }
+    return value;
+  };
+
   const articles: Article[] = verificationData?.sources?.length
     ? verificationData.sources.map((source, index) => {
         const similarityRaw = typeof source.similarity_score === 'number' ? source.similarity_score : 45;
@@ -265,10 +297,10 @@ export function VerifyClaim() {
     : [];
 
   const timeline: TimelineEvent[] = [
-    { date: 'Jan 4, 2026', event: t('verifyTimelineEventInitialMention'), source: t('verifyTimelineSourceSocialMedia') },
-    { date: 'Jan 5, 2026', event: t('verifyTimelineEventFirstTrusted'), source: t('verifyTimelineSourceReuters') },
-    { date: 'Jan 6, 2026', event: t('verifyTimelineEventSecondaryConfirmation'), source: t('verifyTimelineSourceBBC') },
-    { date: 'Jan 7, 2026', event: t('verifyTimelineEventAmplificationWave'), source: t('verifyTimelineSourceBlogs') }
+    { date: formatTimelineDate('2026-01-04'), event: t('verifyTimelineEventInitialMention'), source: t('verifyTimelineSourceSocialMedia') },
+    { date: formatTimelineDate('2026-01-05'), event: t('verifyTimelineEventFirstTrusted'), source: t('verifyTimelineSourceReuters') },
+    { date: formatTimelineDate('2026-01-06'), event: t('verifyTimelineEventSecondaryConfirmation'), source: t('verifyTimelineSourceBBC') },
+    { date: formatTimelineDate('2026-01-07'), event: t('verifyTimelineEventAmplificationWave'), source: t('verifyTimelineSourceBlogs') }
   ];
 
   const averageSimilarity = articles.length
@@ -424,7 +456,7 @@ export function VerifyClaim() {
     : credibilityScore >= 50
       ? t('historyStatusUncertain')
       : t('verifyFallbackVerdictFalse');
-  const verdictLabel = verificationData?.verdict || fallbackVerdictLabel;
+  const verdictLabel = localizeBackendVerdict(verificationData?.verdict) || fallbackVerdictLabel;
 
   const verificationVerdict = credibilityScore >= 75
     ? {
@@ -494,7 +526,7 @@ export function VerifyClaim() {
     }
   ];
 
-  const summaryText = verificationData?.summary || t('verifySummaryFallback');
+  const summaryText = localizeBackendSummary(verificationData?.summary) || t('verifySummaryFallback');
   const summaryParts = summaryText.split(/(?<=[.!?])\s+/).filter(Boolean);
 
   const explanationPoints = [
@@ -1210,8 +1242,8 @@ export function VerifyClaim() {
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            <span className="rounded-full border border-[#22C55E]/20 bg-[#22C55E]/10 px-3 py-1 text-xs text-[#4ADE80]">Credibility {getSourceRating(article.similarity)}</span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#94A3B8]">Published {article.date}</span>
+                            <span className="rounded-full border border-[#22C55E]/20 bg-[#22C55E]/10 px-3 py-1 text-xs text-[#4ADE80]">{t('verifyCredibilityLabel')} {getSourceRating(article.similarity)}</span>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#94A3B8]">{t('verifyPublishedLabel', { date: article.date })}</span>
                           </div>
                         </motion.div>
                       ))}
@@ -1261,9 +1293,9 @@ export function VerifyClaim() {
                           </div>
                           <div className="flex flex-wrap gap-2">
                             <span className={`rounded-full border px-3 py-1 text-xs ${article.similarity >= 0.5 ? 'border-[#FBBF24]/20 bg-[#FBBF24]/10 text-[#FCD34D]' : 'border-[#EF4444]/20 bg-[#EF4444]/10 text-[#FCA5A5]'}`}>
-                              Credibility {getSourceRating(article.similarity)}
+                              {t('verifyCredibilityLabel')} {getSourceRating(article.similarity)}
                             </span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#94A3B8]">Published {article.date}</span>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#94A3B8]">{t('verifyPublishedLabel', { date: article.date })}</span>
                           </div>
                         </motion.div>
                       ))}

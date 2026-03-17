@@ -8,9 +8,27 @@ import { getMonthlyVerificationCount } from '../services/api';
 export function Sidebar() {
   const location = useLocation();
   const { isDarkMode, toggleDarkMode } = useDarkMode();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const [monthlyCount, setMonthlyCount] = useState<number | null>(null);
   const [monthLabel, setMonthLabel] = useState('');
+
+  const formatMonthLabel = (rawLabel: string): string => {
+    const trimmed = rawLabel.trim();
+    if (!trimmed) return '';
+
+    const normalized = /^\d{4}-\d{2}$/.test(trimmed)
+      ? `${trimmed}-01`
+      : /^[A-Za-z]+\s+\d{4}$/.test(trimmed)
+        ? `${trimmed} 1`
+        : trimmed;
+
+    const parsed = new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) {
+      return trimmed;
+    }
+
+    return parsed.toLocaleDateString(locale, { month: 'long', year: 'numeric' });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -116,10 +134,10 @@ export function Sidebar() {
         }`}>
           <p className="text-xs text-[#22D3EE] mb-1 font-medium">{t('totalVerifications')}</p>
           <p className={`text-2xl font-bold transition-colors ${isDarkMode ? 'text-[#F9FAFB]' : 'text-[#0F172A]'}`}>
-            {monthlyCount !== null ? monthlyCount.toLocaleString() : '—'}
+            {monthlyCount !== null ? monthlyCount.toLocaleString(locale) : '—'}
           </p>
           <p className={`text-xs mt-1 transition-colors ${isDarkMode ? 'text-[#9CA3AF]' : 'text-[#94A3B8]'}`}>
-            {monthLabel ? t('completedIn', { month: monthLabel }) : t('completedThisMonth')}
+            {monthLabel ? t('completedIn', { month: formatMonthLabel(monthLabel) }) : t('completedThisMonth')}
           </p>
         </div>
       </div>
